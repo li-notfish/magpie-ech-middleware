@@ -161,12 +161,22 @@ sidecar/bin/win32-x64/ech-sidecar.exe -upstream https://api.example.com -listen 
 It writes one JSON line to its stdout when it is listening:
 
 ```json
-{"port":8790,"upstream":"https://api.example.com","ech":true,"cover":"example.com"}
+{"port":8790,"upstream":"https://api.example.com","ech":false,"cover":""}
+```
+
+That line says the sidecar is listening. The ECH config is looked up
+afterwards, in the background, so `ech` is false and `cover` is empty in
+it: the line is a readiness signal, not a statement about the handshake.
+`/_ech/health` answers with the state as it is now, without touching the
+API:
+
+```json
+{"ok":true,"upstream":"https://api.example.com","ech":true,"cover":"example.com"}
 ```
 
 `ech` says whether a config list is in use, and `cover` is the name the
 outer hello carries — the one a network sees. The sidecar serves the API
-on 127.0.0.1 and answers `/_ech/health` without touching the API.
+on 127.0.0.1.
 
 The binaries for the platforms the package covers are in
 `sidecar/bin/<platform>-<arch>/`, so an install needs no Go at all:

@@ -140,12 +140,19 @@ sidecar/bin/win32-x64/ech-sidecar.exe -upstream https://api.example.com -listen 
 它开始监听时往 stdout 写一行 JSON：
 
 ```json
-{"port":8790,"upstream":"https://api.example.com","ech":true,"cover":"example.com"}
+{"port":8790,"upstream":"https://api.example.com","ech":false,"cover":""}
+```
+
+这行说的是「sidecar 已经在监听」。ECH 配置是之后在后台查的，所以这行里的
+`ech` 是 false、`cover` 是空的：它是就绪信号，不是握手结果的说明。当前状态由
+`/_ech/health` 给出，它不碰上游：
+
+```json
+{"ok":true,"upstream":"https://api.example.com","ech":true,"cover":"example.com"}
 ```
 
 `ech` 表示当前用的是不是配置列表，`cover` 是外层 hello 里带的那个名字——网络看到
-的就是它。sidecar 把上游服务在 127.0.0.1 上，并且有一个不碰上游的
-`/_ech/health`。
+的就是它。sidecar 把上游服务在 127.0.0.1 上。
 
 包里带了各平台的二进制，在 `sidecar/bin/<platform>-<arch>/`，所以装上就能用，
 不用装 Go：
