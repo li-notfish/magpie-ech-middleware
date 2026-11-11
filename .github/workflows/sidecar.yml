@@ -1,0 +1,60 @@
+name: sidecar
+
+# The package ships a binary per platform, so that a machine that installs
+# it needs no Go at all. This workflow is how those binaries are made: one
+# Go build per platform, into sidecar/bin/<platform>-<arch>/, which is
+# where the plugin looks for the one it runs.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "sidecar/**"
+      - "scripts/**"
+      - ".github/workflows/sidecar.yml"
+  pull_request:
+    paths:
+      - "sidecar/**"
+      - "scripts/**"
+      - "ech.middleware.js"
+      - "ech.middleware.test.mjs"
+      - "sidecar.mjs"
+      - "sidecar.test.mjs"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.4"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: build the sidecar for every platform
+        run: node scripts/build-all.mjs
+
+      - name: test
+        run: bun test
+
+      - name: commit the binaries that changed
+        if: github.event_name == 'push'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add sidecar/bin
+          if git diff --staged --quiet; then
+            echo "the binaries are the same as the ones in the repository"
+          else
+            git commit -m "chore: rebuild the sidecar binaries"
+            git push
+          fi

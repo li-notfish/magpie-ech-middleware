@@ -1,0 +1,55 @@
+{
+  "name": "magpie-ech-middleware",
+  "version": "0.2.0",
+  "description": "Encrypted Client Hello for magpie: a gateway middleware that routes the models you name to a local ECH sidecar and stops the plaintext fallback",
+  "type": "module",
+  "files": [
+    "ech.middleware.js",
+    "ech.hooks.js",
+    "sidecar.mjs",
+    "sidecar/main.go",
+    "sidecar/ech.go",
+    "sidecar/go.mod",
+    "sidecar/bin",
+    "scripts/build.mjs",
+    "scripts/build-all.mjs",
+    "scripts/go.mjs",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "magpie",
+    "magpie-middleware",
+    "ech",
+    "encrypted-client-hello",
+    "tls",
+    "privacy"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/li-notfish/magpie-ech-middleware"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:all": "node scripts/build-all.mjs",
+    "test": "bun test"
+  },
+  "magpie": {
+    "middleware": "./ech.middleware.js",
+    "hooks": "./ech.hooks.js",
+    "options": {
+      "api": "",
+      "port": 8790,
+      "provider": "ech",
+      "models": {},
+      "all": false,
+      "strict": false,
+      "failClosed": false,
+      "restoreName": true,
+      "log": true,
+      "off": false
+    }
+  }
+}

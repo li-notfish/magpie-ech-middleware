@@ -1,0 +1,6 @@
+# The source is kept as it is written, so that a build on one machine is
+# the same as a build on another.
+* text=auto eol=lf
+
+# The sidecar's binaries are binaries: nothing normalizes them.
+sidecar/bin/** -text
