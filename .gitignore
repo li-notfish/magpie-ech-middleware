@@ -1,3 +1,7 @@
 # The sidecar's binaries are in the repository, in sidecar/bin/: a machine
 # that runs one of the platforms they cover needs no Go at all. They are not
 # ignored, so that an install from the repository brings them along.
+
+# The code graph of the repository, of the machine that made it: it is of no
+# use to anyone else.
+.codegraph/
