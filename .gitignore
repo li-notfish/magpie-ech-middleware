@@ -1,7 +1,3 @@
 # The sidecar's binaries are in the repository, in sidecar/bin/: a machine
 # that runs one of the platforms they cover needs no Go at all. They are not
 # ignored, so that an install from the repository brings them along.
-
-# The API this machine talks to. It is not in the package either: the
-# published package names no API of its own.
-ech.local.json

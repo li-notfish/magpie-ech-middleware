@@ -12,15 +12,17 @@
 // for the platforms that have no binary: the package builds it when it
 // is missing and this computer has Go.
 //
-// The upstream the sidecar talks to is the one the user names: the
-// plugin's own options, ECH_API, or a local file beside the package.
-// None of them names one by default, so the published package carries
-// no address of anyone's.
+// The upstreams the sidecar talks to are the providers the user wrote:
+// the plugin writes them into a file of its own, in magpie's folder, and
+// the sidecar reads that file (and reads it again when it changes). So
+// the published package carries no address of anyone's, and a provider
+// added later is served without the sidecar being started again.
 import { spawn } from "node:child_process"
-import { existsSync, mkdirSync, readFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import http from "node:http"
 import { delimiter, dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
+import { portOf } from "./ech.shared.js"
 
 // Where the package sits, and where the sidecar is looked for.
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -36,60 +38,67 @@ const SIDECAR_WAIT = 30000
 // spawn one a second.
 const RETRY = 30000
 
-// DEFAULT_PORT is the port the sidecar listens on when the options do not
-// say: the provider that points at the sidecar is written by hand, and a
-// port every machine uses is easier to write than one that changes.
-const DEFAULT_PORT = 8790
-
 // HEALTH_PATH answers the keeper's own check without touching the
 // upstream.
 const HEALTH_PATH = "/_ech/health"
 
-// LOCAL_FILE is a file beside the package that names the API to talk to
-// when nothing else does. It is not in the package: it is one machine's
-// setting, and it keeps the published package free of anyone's address.
-const LOCAL_FILE = join(HERE, "ech.local.json")
+// NO_UPSTREAMS is what the keeper says when there is no provider of the
+// user's own to serve.
+const NO_UPSTREAMS = "no provider of your own has an address: there is nothing for the sidecar to talk to"
 
-// NO_API is what the keeper says when nothing names the API to talk to.
-const NO_API =
-  "no API is named: set the plugin's api option, or ECH_API, or a file beside the plugin (see the README)"
+// FOLDER is the folder of the plugin's own, in magpie's folder, where
+// the upstreams are written.
+const FOLDER = "magpie-ech-middleware"
 
-// localAPI is the API the local file names, or nothing when there is no
-// file, no readable file, or no address in it.
-export function localAPI(file = LOCAL_FILE) {
-  if (!file) return ""
-  try {
-    const parsed = JSON.parse(readFileSync(file, "utf8"))
-    const api = typeof parsed === "string" ? parsed : parsed?.api
-    return typeof api === "string" ? api.trim() : ""
-  } catch {
-    return ""
-  }
+// The folder magpie keeps its files in, and the upstreams the sidecar
+// is to serve: what the plugin wrote down last.
+let configDirectory = ""
+let wanted = {}
+
+// upstreamFile is where the upstreams are written: a file of this
+// plugin's own, in magpie's folder.
+export function upstreamFile(directory = configDirectory) {
+  return join(directory, FOLDER, "upstreams.json")
 }
 
-// resolveAPI is the API the sidecar talks to: the options' when they say
-// so, the environment's, the local file's, nothing otherwise.
+// writeUpstreams writes the upstreams the sidecar serves: the name of
+// each provider of the user's own and the address it is reached at.
 //
-// It is the API's base URL. The path it carries is where the API is at,
-// and the sidecar serves that same path, so the requests that go out are
-// the requests the API would have answered without ECH.
-export function resolveAPI(given = "", local = "") {
-  const raw = process.env.ECH_API || given || local
-  if (!raw) return { api: "", origin: "", path: "" }
-  let url
+// What the file says more than that is kept: an ECH config given by
+// hand for a provider that publishes none.
+export function writeUpstreams(directory, providers) {
+  const file = upstreamFile(directory)
+  let was = {}
   try {
-    url = new URL(raw)
+    was = JSON.parse(readFileSync(file, "utf8"))
   } catch {
-    throw new Error(`the API address is not a URL: ${raw}`)
+    was = {}
   }
-  const path = url.pathname.replace(/\/+$/, "")
-  return { api: `${url.origin}${path}`, origin: url.origin, path }
+  const out = {}
+  for (const p of providers) {
+    const had = was?.[p.id]
+    out[p.id] = had && typeof had === "object" && typeof had.url === "string" ? { ...had, url: p.api } : p.api
+  }
+  try {
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, `${JSON.stringify(out, null, 2)}\n`)
+  } catch (error) {
+    console.error(`[ech] the upstreams could not be written: ${error?.message ?? error}`)
+  }
+  return out
 }
 
-// baseURL is the address the provider that points at the sidecar is
-// written with: the sidecar's own address, under the API's path.
-export function baseURL(port, path = "") {
-  return `http://127.0.0.1:${port}${path}`
+// setUpstreams is the upstreams the sidecar is to serve: the providers
+// the user wrote, written down for the sidecar to read.
+export function setUpstreams(directory, providers) {
+  configDirectory = directory
+  wanted = writeUpstreams(directory, providers)
+  return wanted
+}
+
+// upstreams is what the sidecar is to serve, as it was written down.
+export function upstreams() {
+  return wanted
 }
 
 // sidecarName is the binary's name on a platform. Windows wants the
@@ -164,6 +173,10 @@ export function buildSidecar(spawnImpl = spawn, go = findGo()) {
     proc.stderr?.setEncoding?.("utf8")
     proc.stderr?.on("data", (chunk) => {
       err += chunk
+      // The sidecar's own lines are worth seeing: the cover name its
+      // ECH config uses, and a request that failed, are the only word on
+      // what the connection is like. They go to the host's log.
+      process.stderr.write(chunk)
     })
     proc.on("error", (error) => {
       reject(new Error(`the sidecar could not be built: ${error?.message ?? error}`))
@@ -178,23 +191,21 @@ export function buildSidecar(spawnImpl = spawn, go = findGo()) {
   })
 }
 
-// sidecarArgs are the flags the sidecar is started with: the origin it
-// connects to, the address it listens on, and the ECH config the user
-// gives when the DNS record carries none.
-export function sidecarArgs(origin, listen = "") {
-  if (!origin) throw new Error(NO_API)
-  const args = ["-upstream", origin]
+// sidecarArgs are the flags the sidecar is started with: the file it
+// reads its upstreams from, the address it listens on, and what the
+// user says about going on without an ECH config.
+export function sidecarArgs(file, listen = "") {
+  if (!file) throw new Error(NO_UPSTREAMS)
+  const args = ["-upstreams-file", file]
   if (listen) args.push("-listen", listen)
-  const config = process.env.ECH_SIDECAR_CONFIG
-  if (config) args.push("-ech-config", config)
   if (process.env.ECH_SIDECAR_ALLOW_PLAIN === "1") args.push("-allow-plain")
   return args
 }
 
 // startSidecar runs the sidecar and waits for the port it took. The
 // sidecar writes one JSON line to its stdout when it is ready.
-export function startSidecar(spawnImpl = spawn, path = "", origin = "", listen = "") {
-  if (!origin) return Promise.reject(new Error(NO_API))
+export function startSidecar(spawnImpl = spawn, path = "", file = "", listen = "") {
+  if (!file) return Promise.reject(new Error(NO_UPSTREAMS))
   const binary = findSidecar(path)
   return new Promise((resolve, reject) => {
     let settled = false
@@ -208,7 +219,7 @@ export function startSidecar(spawnImpl = spawn, path = "", origin = "", listen =
     }
     let proc
     try {
-      proc = spawnImpl(binary, sidecarArgs(origin, listen), { stdio: ["ignore", "pipe", "pipe"], windowsHide: true })
+      proc = spawnImpl(binary, sidecarArgs(file, listen), { stdio: ["ignore", "pipe", "pipe"], windowsHide: true })
     } catch (error) {
       reject(new Error(`the sidecar could not be started: ${error?.message ?? error}`))
       return
@@ -322,27 +333,49 @@ export async function ensureSidecar(options = {}) {
   return pending
 }
 
+// servesUpstreams is whether the sidecar that is up serves the upstreams
+// that are wanted: the same names at the same addresses.
+export function servesUpstreams(said, want = wanted) {
+  const have = said && typeof said === "object" ? said.upstreams : null
+  if (!have || typeof have !== "object") return false
+  const names = Object.keys(want)
+  if (!names.length) return false
+  return names.every((name) => {
+    const u = have[name]
+    if (!u) return false
+    const url = typeof u === "string" ? u : u.url
+    const trim = (v) => String(v ?? "").replace(/\/+$/, "")
+    return trim(url) === trim(want[name])
+  })
+}
+
 // start brings the sidecar up: it asks the one that may already be there
 // first, and starts one when there is none.
 export async function start(options = {}) {
   const o = options && typeof options === "object" ? options : {}
-  const { api, origin, path } = resolveAPI(typeof o.api === "string" ? o.api : "", localAPI())
-  if (!api) {
-    console.error(`[ech] ${NO_API}`)
+  if (typeof o.directory === "string" && o.directory) configDirectory = o.directory
+  const names = Object.keys(wanted)
+  if (!names.length) {
+    console.error(`[ech] ${NO_UPSTREAMS}`)
     return false
   }
-  const port = Number.isInteger(Number(o.port)) && Number(o.port) > 0 ? Number(o.port) : DEFAULT_PORT
+  const file = upstreamFile(configDirectory)
+  const port = portOf(o)
   const listen = `127.0.0.1:${port}`
 
-  const said = await health(port)
-  if (said && said.ok && said.upstream === origin) {
+  // The check is given the time the caller has: the gateway hook that
+  // starts the sidecar has a second of its own, and the check must not
+  // take it.
+  const timeout = Number.isInteger(Number(o.healthTimeout)) ? Number(o.healthTimeout) : 1500
+  const said = await health(port, timeout)
+  if (said && said.ok && servesUpstreams(said)) {
     up = true
     return true
   }
 
-  console.log(`[ech] starting the sidecar for ${origin}; the provider's base URL is ${baseURL(port, path)}`)
+  console.log(`[ech] starting the sidecar on 127.0.0.1:${port} for ${names.join(", ")}`)
 
-  const { child } = await startSidecar(spawn, "", origin, listen)
+  const { child } = await startSidecar(spawn, "", file, listen)
   running.add(child)
   child?.once?.("exit", () => {
     running.delete(child)

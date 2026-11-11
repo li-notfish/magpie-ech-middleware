@@ -1,20 +1,22 @@
-// The keeper's own tests: where the sidecar is, how it is started, and
-// how it is asked whether it is up.
+// The keeper's own tests: where the sidecar is, what it is to serve,
+// and how it is asked whether it is up.
 import { afterAll, describe, expect, test } from "bun:test"
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import http from "node:http"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import {
-  baseURL,
   findGo,
   findSidecar,
   health,
-  localAPI,
   platformDir,
-  resolveAPI,
+  servesUpstreams,
+  setUpstreams,
   sidecarArgs,
   sidecarName,
+  upstreams,
+  upstreamFile,
+  writeUpstreams,
 } from "./sidecar.mjs"
 
 const temps = []
@@ -23,74 +25,79 @@ afterAll(() => {
   for (const dir of temps) rmSync(dir, { recursive: true, force: true })
 })
 
-// tempFile writes a file in a folder of its own and hands its path back.
-function tempFile(name, body) {
+// tempDir is a folder of its own, to write in.
+function tempDir() {
   const dir = mkdtempSync(join(tmpdir(), "ech-sidecar-"))
   temps.push(dir)
-  const path = join(dir, name)
-  writeFileSync(path, body)
-  return path
+  return dir
 }
 
-describe("localAPI", () => {
-  test("is the API the file names", () => {
-    const file = tempFile("ech.local.json", JSON.stringify({ api: "https://api.example.com" }))
-    expect(localAPI(file)).toBe("https://api.example.com")
-  })
-
-  test("is nothing when the file names none", () => {
-    const file = tempFile("ech.local.json", JSON.stringify({}))
-    expect(localAPI(file)).toBe("")
-  })
-
-  test("is nothing when the file cannot be read", () => {
-    expect(localAPI(join(tmpdir(), "ech-sidecar-nothing-here.json"))).toBe("")
+describe("upstreamFile", () => {
+  test("is in the plugin's own folder, in magpie's folder", () => {
+    const file = upstreamFile(tempDir())
+    expect(file).toContain(join("magpie-ech-middleware", "upstreams.json"))
   })
 })
 
-describe("resolveAPI", () => {
-  test("is the API that is given, with its path", () => {
-    const got = resolveAPI("https://api.example.com/v1/")
-    expect(got.api).toBe("https://api.example.com/v1")
-    expect(got.origin).toBe("https://api.example.com")
-    expect(got.path).toBe("/v1")
+describe("writeUpstreams", () => {
+  test("writes the address of every provider of the user's own", () => {
+    const dir = tempDir()
+    const wrote = writeUpstreams(dir, [
+      { id: "nvidia", api: "https://api.example.com/v1" },
+      { id: "amd", api: "https://other.example.com/v1" },
+    ])
+    expect(wrote).toEqual({
+      nvidia: "https://api.example.com/v1",
+      amd: "https://other.example.com/v1",
+    })
+    const said = JSON.parse(readFileSync(upstreamFile(dir), "utf8"))
+    expect(said).toEqual(wrote)
   })
 
-  test("is the local file's when nothing else says", () => {
-    const got = resolveAPI("", "https://api.example.com/v1")
-    expect(got.api).toBe("https://api.example.com/v1")
+  test("keeps the ECH config given by hand for a provider", () => {
+    const dir = tempDir()
+    const file = upstreamFile(dir)
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(
+      file,
+      JSON.stringify({ nvidia: { url: "https://old.example.com/v1", ech: "Y2VjaA==" } }),
+    )
+    const wrote = writeUpstreams(dir, [{ id: "nvidia", api: "https://new.example.com/v1" }])
+    expect(wrote.nvidia.url).toBe("https://new.example.com/v1")
+    expect(wrote.nvidia.ech).toBe("Y2VjaA==")
   })
 
-  test("is the environment's when it says so", () => {
-    const before = process.env.ECH_API
-    process.env.ECH_API = "https://env.example.com"
-    try {
-      expect(resolveAPI("https://api.example.com").origin).toBe("https://env.example.com")
-    } finally {
-      if (before === undefined) delete process.env.ECH_API
-      else process.env.ECH_API = before
-    }
-  })
-
-  test("is nothing when nothing names one", () => {
-    const before = process.env.ECH_API
-    delete process.env.ECH_API
-    try {
-      expect(resolveAPI("", "")).toEqual({ api: "", origin: "", path: "" })
-    } finally {
-      if (before !== undefined) process.env.ECH_API = before
-    }
-  })
-
-  test("says so when the address is not a URL", () => {
-    expect(() => resolveAPI("not a url")).toThrow(/not a URL/)
+  test("is nothing when there is no provider of the user's own", () => {
+    expect(writeUpstreams(tempDir(), [])).toEqual({})
   })
 })
 
-describe("baseURL", () => {
-  test("is the sidecar's own address, under the API's path", () => {
-    expect(baseURL(8790)).toBe("http://127.0.0.1:8790")
-    expect(baseURL(8790, "/v1")).toBe("http://127.0.0.1:8790/v1")
+describe("setUpstreams", () => {
+  test("is what the sidecar is to serve", () => {
+    const dir = tempDir()
+    setUpstreams(dir, [{ id: "nvidia", api: "https://api.example.com/v1" }])
+    expect(upstreams()).toEqual({ nvidia: "https://api.example.com/v1" })
+  })
+})
+
+describe("servesUpstreams", () => {
+  test("is so when the names and the addresses are the same", () => {
+    const said = { upstreams: { nvidia: { url: "https://api.example.com/v1" } } }
+    expect(servesUpstreams(said, { nvidia: "https://api.example.com/v1" })).toBe(true)
+  })
+
+  test("is not so when an address is another", () => {
+    const said = { upstreams: { nvidia: { url: "https://other.example.com/v1" } } }
+    expect(servesUpstreams(said, { nvidia: "https://api.example.com/v1" })).toBe(false)
+  })
+
+  test("is not so when an upstream is missing", () => {
+    const said = { upstreams: { amd: { url: "https://other.example.com/v1" } } }
+    expect(servesUpstreams(said, { nvidia: "https://api.example.com/v1" })).toBe(false)
+  })
+
+  test("is not so when nothing is wanted", () => {
+    expect(servesUpstreams({ upstreams: {} }, {})).toBe(false)
   })
 })
 
@@ -117,17 +124,17 @@ describe("the sidecar's binary", () => {
 })
 
 describe("sidecarArgs", () => {
-  test("are the upstream and the address to listen on", () => {
-    expect(sidecarArgs("https://api.example.com", "127.0.0.1:8790")).toEqual([
-      "-upstream",
-      "https://api.example.com",
+  test("are the file of the upstreams and the address to listen on", () => {
+    expect(sidecarArgs("C:/magpie/upstreams.json", "127.0.0.1:8790")).toEqual([
+      "-upstreams-file",
+      "C:/magpie/upstreams.json",
       "-listen",
       "127.0.0.1:8790",
     ])
   })
 
-  test("say so when there is no upstream", () => {
-    expect(() => sidecarArgs("")).toThrow(/no API is named/)
+  test("say so when there is no file of the upstreams", () => {
+    expect(() => sidecarArgs("")).toThrow(/nothing for the sidecar to talk to/)
   })
 })
 
@@ -135,14 +142,14 @@ describe("health", () => {
   test("is what the sidecar answers", async () => {
     const server = http.createServer((req, res) => {
       res.writeHead(200, { "content-type": "application/json" })
-      res.end(JSON.stringify({ ok: true, upstream: "https://api.example.com", ech: true }))
+      res.end(JSON.stringify({ ok: true, upstreams: { nvidia: { url: "https://api.example.com/v1" } } }))
     })
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve))
     const port = server.address().port
     try {
       const said = await health(port)
       expect(said.ok).toBe(true)
-      expect(said.upstream).toBe("https://api.example.com")
+      expect(said.upstreams.nvidia.url).toBe("https://api.example.com/v1")
     } finally {
       server.close()
     }
