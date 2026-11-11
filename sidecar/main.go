@@ -154,12 +154,12 @@ func main() {
 		if err := os.WriteFile(*portFile, []byte(fmt.Sprintf("%d", port)), 0o644); err != nil {
 			fail("cannot write the port file %s: %v", *portFile, err)
 		}
+	}
 
 	// The ECH config is looked up after the sidecar listens: the plugin
 	// waits for the line above, and a resolver that is slow must not hold
 	// it up. A request that comes before the config is there waits for it.
 	go sc.resolve(*echConfig, *doh)
-	}
 
 	server := &http.Server{
 		Handler:           mux,
