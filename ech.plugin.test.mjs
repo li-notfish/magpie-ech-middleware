@@ -4,7 +4,7 @@ import { afterAll, describe, expect, test } from "bun:test"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { hooksFor, providersOf } from "./ech.providers.js"
+import { hooksFor, providersOf, wantedOf } from "./ech.providers.js"
 import { portOf } from "./ech.shared.js"
 
 const temps = []
@@ -93,6 +93,71 @@ describe("providersOf", () => {
   test("say the other addresses as they are", () => {
     const dir = tempProviders([{ id: "a", baseAPI: "chat", chat: "https://a.example.com/v1" }])
     expect(providersOf(dir)[0].declared).toBe("https://a.example.com/v1")
+  })
+
+  test("are only the ones the user named", () => {
+    const dir = tempProviders([
+      { id: "nvidia", name: "NVIDIA", baseAPI: "chat", chat: "https://api.example.com/v1" },
+      { id: "amd", name: "AMD", baseAPI: "chat", chat: "https://amd.example.com/v1" },
+    ])
+    expect(providersOf(dir, "nvidia").map((p) => p.id)).toEqual(["nvidia"])
+    expect(providersOf(dir, ["amd"]).map((p) => p.id)).toEqual(["amd"])
+    expect(providersOf(dir, ["nvidia", "amd"]).map((p) => p.id)).toEqual(["nvidia", "amd"])
+  })
+
+  test("are named by the name they are shown under as well", () => {
+    const dir = tempProviders([
+      { id: "nvidia", name: "NVIDIA", baseAPI: "chat", chat: "https://api.example.com/v1" },
+      { id: "amd", name: "AMD", baseAPI: "chat", chat: "https://amd.example.com/v1" },
+    ])
+    expect(providersOf(dir, "NVIDIA").map((p) => p.id)).toEqual(["nvidia"])
+    expect(providersOf(dir, "amd").map((p) => p.id)).toEqual(["amd"])
+    expect(providersOf(dir, "  Amd  ").map((p) => p.id)).toEqual(["amd"])
+  })
+
+  test("are every one of them when none is named", () => {
+    const dir = tempProviders([
+      { id: "nvidia", baseAPI: "chat", chat: "https://api.example.com/v1" },
+      { id: "amd", baseAPI: "chat", chat: "https://amd.example.com/v1" },
+    ])
+    expect(providersOf(dir).map((p) => p.id)).toEqual(["nvidia", "amd"])
+    expect(providersOf(dir, "").map((p) => p.id)).toEqual(["nvidia", "amd"])
+    expect(providersOf(dir, []).map((p) => p.id)).toEqual(["nvidia", "amd"])
+  })
+
+  test("are none when the name is of no provider of the user's", () => {
+    const dir = tempProviders([
+      { id: "nvidia", baseAPI: "chat", chat: "https://api.example.com/v1" },
+    ])
+    expect(providersOf(dir, "nobody")).toEqual([])
+  })
+
+  test("are none when the provider named has no address of its own", () => {
+    const dir = tempProviders([{ id: "workbuddy", name: "WorkBuddy", models: ["c"] }])
+    expect(providersOf(dir, "workbuddy")).toEqual([])
+  })
+})
+
+describe("wantedOf", () => {
+  test("is the name the user wrote", () => {
+    expect(wantedOf({ providers: "nvidia" })).toEqual(["nvidia"])
+  })
+
+  test("is every name the user wrote", () => {
+    expect(wantedOf({ providers: ["nvidia", "AMD"] })).toEqual(["nvidia", "amd"])
+  })
+
+  test("is nothing when the option is not there", () => {
+    expect(wantedOf({})).toBe(null)
+    expect(wantedOf(null)).toBe(null)
+    expect(wantedOf(undefined)).toBe(null)
+  })
+
+  test("is nothing when what is written is empty", () => {
+    expect(wantedOf({ providers: "" })).toBe(null)
+    expect(wantedOf({ providers: "   " })).toBe(null)
+    expect(wantedOf({ providers: [] })).toBe(null)
+    expect(wantedOf({ providers: 3 })).toBe(null)
   })
 })
 

@@ -26,7 +26,7 @@
 // exports as a plugin of its own, and a helper of ours would be asked
 // to be one.
 import { ensureSidecar, setUpstreams } from "./sidecar.mjs"
-import { hooksFor, providersOf } from "./ech.providers.js"
+import { hooksFor, providersOf, wantedOf } from "./ech.providers.js"
 import { mirrorId, portOf } from "./ech.shared.js"
 
 // SLOTS is how many ECH copies this plugin can declare. More than a
@@ -40,12 +40,24 @@ const SLOTS = 16
 function slot(index) {
   return async (input, options) => {
     const directory = typeof input?.directory === "string" ? input.directory : ""
-    const providers = providersOf(directory)
+    // The user may want one provider only: the ones they named in the
+    // options, and no other. Nothing named is every provider.
+    const wanted = wantedOf(options)
+    const providers = providersOf(directory, wanted)
+
+    // These two are about the plugin as a whole, so the first slot says
+    // them once and the rest stay quiet.
+    if (index === 1) {
+      if (wanted && providers.length === 0) {
+        console.error(`[ech] the providers option names none of the providers you wrote that have an address: ${wanted.join(", ")}`)
+      }
+      if (providers.length > SLOTS) {
+        console.error(`[ech] only the first ${SLOTS} providers with an address are copied; the rest are left alone`)
+      }
+    }
+
     const provider = providers[index - 1]
     if (!provider) return {}
-    if (providers.length > SLOTS) {
-      console.error(`[ech] only the first ${SLOTS} providers with an address are copied; the rest are left alone`)
-    }
 
     const port = portOf(options)
     const id = mirrorId(provider.id)

@@ -45,6 +45,7 @@
     "hooks": "./ech.hooks.js",
     "options": {
       "port": 8790,
+      "providers": "",
       "failClosed": false,
       "log": true
     }

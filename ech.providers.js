@@ -21,22 +21,29 @@ const NPMS = {
 // them: an id, a name, the address of each API, a key and the models it
 // serves. A provider without an address is one of another plugin's
 // (its address is that plugin's own business), so it is left alone.
-export function providersOf(directory) {
+//
+// wanted is the providers the user wants, as they wrote them in the
+// options (see wantedOf). Nothing wanted is every provider.
+export function providersOf(directory, wanted = null) {
   let parsed
   try {
     parsed = JSON.parse(readFileSync(join(directory, "providers.json"), "utf8"))
   } catch {
     return []
   }
+  const names = namesOf(wanted)
   const list = Array.isArray(parsed?.providers) ? parsed.providers : []
   const out = []
   for (const p of list) {
     if (!p || typeof p.id !== "string" || !p.id.trim()) continue
     const api = apiOf(p)
     if (!api) continue
+    const id = p.id.trim()
+    const name = typeof p.name === "string" && p.name.trim() ? p.name.trim() : id
+    if (names && !names.includes(id.toLowerCase()) && !names.includes(name.toLowerCase())) continue
     out.push({
-      id: p.id.trim(),
-      name: typeof p.name === "string" && p.name.trim() ? p.name.trim() : p.id.trim(),
+      id,
+      name,
       api,
       declared: declaredOf(p, api),
       key: typeof p.key === "string" ? p.key : "",
@@ -45,6 +52,31 @@ export function providersOf(directory) {
     })
   }
   return out
+}
+
+// wantedOf are the providers the user wants copied, as they wrote them
+// in the options: a name, a list of names, or nothing.
+//
+// A provider is named by its id or by the name it is shown under, and
+// it is matched without regard to case. Nothing wanted is no list: every
+// provider is wanted.
+export function wantedOf(options) {
+  const raw = options && typeof options === "object" ? options.providers : undefined
+  return namesOf(raw)
+}
+
+// namesOf are the names the user wrote, as they are to be matched: each
+// trimmed and lowercased, the empty ones left out. Nothing left is no
+// list at all.
+function namesOf(raw) {
+  const list = Array.isArray(raw) ? raw : [raw]
+  const out = []
+  for (const v of list) {
+    if (typeof v !== "string") continue
+    const t = v.trim().toLowerCase()
+    if (t && !out.includes(t)) out.push(t)
+  }
+  return out.length ? out : null
 }
 
 // apiOf is the address of the API the user's provider is written with:

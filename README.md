@@ -12,7 +12,8 @@ goes out with an encrypted client hello.
 
 - **The plugin** (`ech.plugin.js`) reads the providers you wrote
   (`providers.json`) and declares an ECH copy of each one that has an
-  address of its own: the copy of `nvidia` is `ech-nvidia`. The copy's
+  address of its own: the copy of `nvidia` is `ech-nvidia`. Which of
+  them get a copy is what the `providers` option says. The copy's
   api is the address your own provider has, so magpie keeps treating the
   vendor as that vendor. Its loader sends the requests to the sidecar,
   which makes the connection with an Encrypted Client Hello and forwards
@@ -57,6 +58,12 @@ serves the same models, under the same names.
 Nothing is asked of you: the copy is signed in with the key your own
 provider already has.
 
+To have a copy of one provider only, name it in the options (see below):
+
+```sh
+magpie plugin options magpie-ech-middleware '{"providers":"nvidia"}'
+```
+
 ## The options
 
 They are the plugin's own, in `plugins.json`:
@@ -65,8 +72,26 @@ They are the plugin's own, in `plugins.json`:
 | option | default | what it does |
 | --- | --- | --- |
 | `port` | `8790` | the port the sidecar listens on |
+| `providers` | all of them | the providers to copy: a name, or a list of names |
 | `failClosed` | `false` | turn away a request that names no copy |
 | `log` | `true` | write a line per try into magpie's log |
+
+`providers` says which of your providers get a copy. A provider is named
+by its id (`nvidia`) or by the name it is shown under (`NVIDIA`), in any
+case, and more than one of them is a list:
+
+```sh
+magpie plugin options magpie-ech-middleware '{"providers":"nvidia"}'
+magpie plugin options magpie-ech-middleware '{"providers":["nvidia","amd"]}'
+```
+
+Left empty, every provider with an address of its own is copied. A name
+that is of no provider of yours copies nothing, and the plugin says so
+in the log.
+
+The option is read when the plugin is loaded, and magpie loads the
+plugin again when plugins.json changes: the next request is answered by
+the copies the option names.
 
 `failClosed` is what makes the guarantee real: it turns a request away
 whose model names no copy. A model that already names one is left alone.
@@ -176,8 +201,8 @@ npm run build
 ## Troubleshooting
 
 - **No copy of a provider appears** - the provider has no address of its
-  own (it is another plugin's provider), or there are more than sixteen
-  providers with an address.
+  own (it is another plugin's provider), the `providers` option names
+  another one, or there are more than sixteen providers with an address.
 - **The log says `[direct]`** - the request did not go through the
   sidecar: the model it named is not a copy's.
 - **The sidecar says it has no ECH config** - the vendor's DNS record

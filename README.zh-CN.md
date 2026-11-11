@@ -10,8 +10,9 @@
 ## 包里四块
 
 - **插件**（`ech.plugin.js`）读你自己写的供应商（`providers.json`），给其中每一个
-  有自己地址的供应商声明一份 ECH 副本：`nvidia` 的副本叫 `ech-nvidia`。副本的 api
-  就是你自己那个供应商的地址，所以 magpie 仍然把这一家当这一家看待。副本的
+  有自己地址的供应商声明一份 ECH 副本：`nvidia` 的副本叫 `ech-nvidia`。给哪几个
+  做由 `providers` 选项说了算。副本的 api 就是你自己那个供应商的地址，所以 magpie
+  仍然把这一家当这一家看待。副本的
   loader 把请求发到 sidecar，由 sidecar 用 Encrypted Client Hello 建连再转发给
   厂商。副本用你自己那个供应商的 key 登录，所以什么都不用问你。
 - **sidecar**（`sidecar/`）是一个小的 Go 程序：通过 DoH 解析每个上游的 ECH 配置，
@@ -48,6 +49,12 @@ agent 问 `ech-nvidia/<模型>`，请求于是从 sidecar 出去。模型还是�
 
 不用你做任何事：副本用你自己那个供应商已有的 key 登录。
 
+只想给其中一个供应商做副本，就在选项里点名它（见下面）：
+
+```sh
+magpie plugin options magpie-ech-middleware '{"providers":"nvidia"}'
+```
+
 ## 选项
 
 都是插件自己的选项，在 `plugins.json` 里：
@@ -56,8 +63,23 @@ agent 问 `ech-nvidia/<模型>`，请求于是从 sidecar 出去。模型还是�
 | 选项 | 默认 | 做什么 |
 | --- | --- | --- |
 | `port` | `8790` | sidecar 监听哪个端口 |
+| `providers` | 全部 | 给哪几个做副本：一个名字，或者一串名字 |
 | `failClosed` | `false` | 把没点名副本的请求拒掉 |
 | `log` | `true` | 每次尝试往 magpie 的日志里写一行 |
+
+`providers` 说给哪几个供应商做副本。名字可以是 id（`nvidia`），也可以是界面上显示
+的名字（`NVIDIA`），大小写不管；要多个就写一串：
+
+```sh
+magpie plugin options magpie-ech-middleware '{"providers":"nvidia"}'
+magpie plugin options magpie-ech-middleware '{"providers":["nvidia","amd"]}'
+```
+
+留空就是每一个自己有地址的供应商都做一份。写的名字不是你写过的供应商，就一个都
+不做，插件会在日志里说一声。
+
+选项是插件加载的时候读的，plugins.json 变了 magpie 会重新加载插件：下一个请求
+就是由这个选项点名的那些副本来答。
 
 `failClosed` 才是保证本身：把模型没点名副本的请求拒掉，已经点名了副本的不动。
 
@@ -151,8 +173,8 @@ npm run build
 
 ## 出问题时
 
-- **某个供应商没有副本** —— 它没有自己的地址（是别的插件的供应商），或者有地址
-  的供应商超过十六个。
+- **某个供应商没有副本** —— 它没有自己的地址（是别的插件的供应商），`providers`
+  选项点的是别的名字，或者有地址的供应商超过十六个。
 - **日志里写着 `[direct]`** —— 这个请求没走 sidecar：它问的模型不是副本的。
 - **sidecar 说没有 ECH 配置** —— 厂商的 DNS 记录里没有 `ech` 参数。中转站的
   主机名就没有，这时用 `ECH_SIDECAR_ALLOW_PLAIN=1` 启动 sidecar，它会不加密也
