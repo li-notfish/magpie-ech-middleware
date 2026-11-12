@@ -83,9 +83,10 @@ export function slugOf(address) {
 // EFFORTS are the levels of thought a model of the openai kinds is asked
 // at, weakest first, as the variants magpie offers (the reasoningEffort
 // that @ai-sdk/openai-compatible asks an effort by). A listing of models
-// says nothing of the levels a model takes, so the three OpenCode knows
-// are offered beside each, and the user picks among them.
-const EFFORTS = ["low", "medium", "high"]
+// says nothing of the levels a model takes, so the five OpenCode knows
+// are offered beside each, and the user picks among them — the ones they
+// untick are kept untick across listings, in magpie's settings.
+const EFFORTS = ["low", "medium", "high", "xhigh", "max"]
 
 // variantsOf is the levels of thought offered for a kind of API: the
 // openai kinds ask an effort by, and the other two think by a budget of

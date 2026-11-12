@@ -141,13 +141,25 @@ describe("the models of an account", () => {
           name: "gpt-4o",
           api: { id: "gpt-4o", npm: "@ai-sdk/openai-compatible" },
           capabilities: { reasoning: true },
-          variants: { low: { reasoningEffort: "low" }, medium: { reasoningEffort: "medium" }, high: { reasoningEffort: "high" } },
+          variants: {
+            low: { reasoningEffort: "low" },
+            medium: { reasoningEffort: "medium" },
+            high: { reasoningEffort: "high" },
+            xhigh: { reasoningEffort: "xhigh" },
+            max: { reasoningEffort: "max" },
+          },
         },
         "gpt-4o-mini": {
           name: "GPT-4o mini",
           api: { id: "gpt-4o-mini", npm: "@ai-sdk/openai-compatible" },
           capabilities: { reasoning: true },
-          variants: { low: { reasoningEffort: "low" }, medium: { reasoningEffort: "medium" }, high: { reasoningEffort: "high" } },
+          variants: {
+            low: { reasoningEffort: "low" },
+            medium: { reasoningEffort: "medium" },
+            high: { reasoningEffort: "high" },
+            xhigh: { reasoningEffort: "xhigh" },
+            max: { reasoningEffort: "max" },
+          },
         },
       })
     } finally {
@@ -186,7 +198,13 @@ describe("the models of an account", () => {
           name: "gpt-4o",
           api: { id: "gpt-4o", npm: "@ai-sdk/openai-compatible" },
           capabilities: { reasoning: true },
-          variants: { low: { reasoningEffort: "low" }, medium: { reasoningEffort: "medium" }, high: { reasoningEffort: "high" } },
+          variants: {
+            low: { reasoningEffort: "low" },
+            medium: { reasoningEffort: "medium" },
+            high: { reasoningEffort: "high" },
+            xhigh: { reasoningEffort: "xhigh" },
+            max: { reasoningEffort: "max" },
+          },
         },
       })
       const said = JSON.parse(readFileSync(upstreamFile(temps.at(-1)), "utf8"))
