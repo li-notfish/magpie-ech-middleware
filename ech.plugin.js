@@ -1,102 +1,120 @@
-// The provider side of this package: an ECH copy of every provider the
-// user wrote, so that their traffic goes out with an Encrypted Client
-// Hello.
+// The provider side of this package: one provider of the user's own,
+// signed in to with the address of an upstream and its key, whose
+// traffic goes out with an Encrypted Client Hello.
 //
-// The plugin runs in Bun, in magpie's plugin host. It reads the
-// providers the user wrote (providers.json) and, for each one that has
-// an address, declares an ECH copy of it:
+// The plugin runs in Bun, in magpie's plugin host. It declares one
+// provider, "ech". Signing in to it asks for the address of the
+// upstream and its API key, the way the user's own providers are
+// written. Every sign-in is one upstream, and one upstream may be
+// signed in to more than once (two keys of the same vendor, say): the
+// provider can be signed in to as many times as the user likes.
 //
-//   ech-nvidia        the ECH copy of the provider "nvidia"
-//
-// The copy's api is the address the user's own provider has, so magpie
-// keeps treating the vendor as that vendor (the thinking parts of
-// Mistral, the reasoning replay of DeepSeek, and the rest). Its loader
-// sends the requests to the sidecar, which makes the connection with an
-// Encrypted Client Hello and forwards it to that address.
-//
-// The copy is signed in with the key the user's own provider has, so
-// nothing is asked of the user: the key is read from providers.json,
-// and magpie sends it as it sends any other provider's.
-//
-// magpie gives a plugin one sign-in per function it exports, and the
-// number of providers the user wrote is only known when the plugin is
-// loaded. So this file exports one function per provider it can copy.
+// The provider's loader sends the requests to the sidecar, which makes
+// the connection with an Encrypted Client Hello and forwards them to the
+// address the sign-in named. Its models are the ones the upstream lists,
+// asked through the sidecar as well.
 //
 // It exports nothing else: magpie reads every function a plugin's entry
-// exports as a plugin of its own, and a helper of ours would be asked
-// to be one.
-import { ensureSidecar, setUpstreams } from "./sidecar.mjs"
-import { hooksFor, providersOf, wantedOf } from "./ech.providers.js"
-import { mirrorId, portOf } from "./ech.shared.js"
+// exports as a plugin of its own, and a helper of ours would be asked to
+// be one.
+import { ensureSidecar, setUpstream } from "./sidecar.mjs"
+import { KINDS, addressOf, kindOf, listedOf, slugOf, validateAddress } from "./ech.providers.js"
+import { portOf } from "./ech.shared.js"
 
-// SLOTS is how many ECH copies this plugin can declare. More than a
-// dozen providers with an address of their own is rare; the ones past
-// this are left alone, and the plugin says so.
-const SLOTS = 16
+// PROVIDER is the provider this package serves. Its models come from the
+// upstream each account is signed in to, so none are declared here.
+const PROVIDER = "ech"
 
-// slot is the plugin function of one ECH copy: the copy of the
-// provider the user wrote in that place. A slot with no provider of its
-// own says nothing, and magpie keeps the others.
-function slot(index) {
-  return async (input, options) => {
-    const directory = typeof input?.directory === "string" ? input.directory : ""
-    // The user may want one provider only: the ones they named in the
-    // options, and no other. Nothing named is every provider.
-    const wanted = wantedOf(options)
-    const providers = providersOf(directory, wanted)
+export const ech = async (input, options) => {
+  const directory = typeof input?.directory === "string" ? input.directory : ""
+  const port = portOf(options)
 
-    // These two are about the plugin as a whole, so the first slot says
-    // them once and the rest stay quiet.
-    if (index === 1) {
-      if (wanted && providers.length === 0) {
-        console.error(`[ech] the providers option names none of the providers you wrote that have an address: ${wanted.join(", ")}`)
+  return {
+    config: async (cfg) => {
+      cfg.provider ??= {}
+      cfg.provider[PROVIDER] ??= {
+        name: "ECH",
+        npm: "@ai-sdk/openai-compatible",
+        api: `http://127.0.0.1:${port}`,
+        models: {},
       }
-      if (providers.length > SLOTS) {
-        console.error(`[ech] only the first ${SLOTS} providers with an address are copied; the rest are left alone`)
-      }
-    }
+    },
 
-    const provider = providers[index - 1]
-    if (!provider) return {}
+    auth: {
+      provider: PROVIDER,
+      methods: [
+        {
+          type: "api",
+          label: "API key",
+          prompts: [
+            {
+              type: "text",
+              key: "baseURL",
+              message: "Base URL",
+              placeholder: "https://api.example.com/v1",
+              validate: validateAddress,
+            },
+            { type: "select", key: "kind", message: "API", options: KINDS },
+            { type: "password", key: "key", message: "API key", placeholder: "sk-…" },
+          ],
+          // magpie keeps the answers of the select prompts only, and an
+          // api method with an authorize of its own is asked no key: the
+          // authorize signs in with what was answered, and the metadata
+          // it gives back is the one kept — the address among it.
+          async authorize(inputs) {
+            const address = addressOf(inputs)
+            if (!address) return { type: "failed", error: "an http(s) address of the upstream, like https://api.example.com/v1" }
+            const key = typeof inputs.key === "string" ? inputs.key.trim() : ""
+            if (!key) return { type: "failed", error: "an API key of the upstream" }
+            return { type: "success", key, metadata: { baseURL: address, kind: kindOf(inputs) } }
+          },
+        },
+      ],
+      async loader(getAuth) {
+        const auth = await getAuth()
+        if (auth?.type !== "api") return {}
+        const address = addressOf(auth.metadata)
+        if (!address) {
+          console.error("[ech] the sign-in names no address; sign in again with one")
+          return {}
+        }
 
-    const port = portOf(options)
-    const id = mirrorId(provider.id)
+        // The sidecar serves every upstream any account is signed in to:
+        // this one is written down for it to read.
+        const slug = slugOf(address)
+        setUpstream(directory, slug, address)
+        return { baseURL: `http://127.0.0.1:${port}/${slug}`, apiKey: auth.key }
+      },
+    },
 
-    // The sidecar serves every provider the user wrote, not only this
-    // one: it is told of them all before it is started.
-    setUpstreams(directory, providers)
-    ensureSidecar({ directory, port }).catch(() => {})
+    provider: {
+      id: PROVIDER,
+      async models(given, { auth }) {
+        // magpie hands the provider as it has it now, the models it
+        // already knows among its fields: what comes back is the models
+        // themselves, so a fallback hands those back, not the provider,
+        // or its own fields would be read in as models of theirs.
+        const known = given?.models ?? {}
+        if (auth?.type !== "api") return known
+        const address = addressOf(auth.metadata)
+        if (!address) return known
 
-    // The copy is signed in with the key the user's own provider has,
-    // so the user is asked for nothing.
-    try {
-      await input?.client?.auth?.set({
-        path: { id },
-        body: { type: "api", key: provider.key },
-      })
-    } catch (error) {
-      console.error(`[ech] ${id} could not be signed in: ${error?.message ?? error}`)
-    }
-
-    return hooksFor(provider, port)
+        // The listing is what brings the sidecar up, and a loader runs
+        // for a request, not for a listing: the upstream is written down
+        // here, the way the loader writes it for its requests.
+        setUpstream(directory, slugOf(address), address)
+        const up = await ensureSidecar({ directory, port })
+        if (!up) {
+          console.error("[ech] the sidecar is not up, so the models stay as they were")
+          return known
+        }
+        const said = await listedOf(kindOf(auth.metadata), address, typeof auth.key === "string" ? auth.key : "", port)
+        if (!said) {
+          console.error(`[ech] the models of ${address} could not be listed; the ones known stay`)
+          return known
+        }
+        return said
+      },
+    },
   }
 }
-
-// One export per provider this plugin can copy. magpie reads a plugin's
-// sign-ins from the functions it exports, one each.
-export const echCopy01 = slot(1)
-export const echCopy02 = slot(2)
-export const echCopy03 = slot(3)
-export const echCopy04 = slot(4)
-export const echCopy05 = slot(5)
-export const echCopy06 = slot(6)
-export const echCopy07 = slot(7)
-export const echCopy08 = slot(8)
-export const echCopy09 = slot(9)
-export const echCopy10 = slot(10)
-export const echCopy11 = slot(11)
-export const echCopy12 = slot(12)
-export const echCopy13 = slot(13)
-export const echCopy14 = slot(14)
-export const echCopy15 = slot(15)
-export const echCopy16 = slot(16)

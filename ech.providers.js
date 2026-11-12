@@ -1,11 +1,10 @@
-// The providers the user wrote, and the ECH copy each of them gets.
+// The helpers of the plugin's: the kinds of API an upstream speaks, the
+// name an upstream is served under, and the models it lists.
 //
 // This is a helper of the plugin's, not the plugin's entry: magpie reads
 // every function the entry exports as a plugin of its own, so what is
 // here is kept out of it.
-import { readFileSync } from "node:fs"
-import { join } from "node:path"
-import { DEFAULT_PORT, mirrorId } from "./ech.shared.js"
+import { createHash } from "node:crypto"
 
 // NPMS is the AI SDK package each kind of API is spoken on: magpie reads
 // the protocol of a model's requests from it, the way it reads the
@@ -17,150 +16,160 @@ const NPMS = {
   gemini: "@ai-sdk/google",
 }
 
-// providersOf are the providers the user wrote, as providers.json keeps
-// them: an id, a name, the address of each API, a key and the models it
-// serves. A provider without an address is one of another plugin's
-// (its address is that plugin's own business), so it is left alone.
-//
-// wanted is the providers the user wants, as they wrote them in the
-// options (see wantedOf). Nothing wanted is every provider.
-export function providersOf(directory, wanted = null) {
-  let parsed
+// KINDS is the kinds of API an upstream may speak, as the sign-in asks
+// them: the first is what most of them speak.
+export const KINDS = [
+  { value: "chat", label: "Chat Completions" },
+  { value: "responses", label: "Responses" },
+  { value: "anthropic", label: "Anthropic Messages" },
+  { value: "gemini", label: "Gemini" },
+]
+
+// kindOf is the kind of API the sign-in named: the one it said, else the
+// chat one, which is what most of them speak.
+export function kindOf(metadata) {
+  const kind = metadata && String(metadata.kind ?? "").trim().toLowerCase()
+  return NPMS[kind] ? kind : "chat"
+}
+
+// addressOf is the address the sign-in names, as the sidecar is to reach
+// it: an http(s) address, or "" when none was given.
+export function addressOf(metadata) {
+  const said = metadata && typeof metadata.baseURL === "string" ? metadata.baseURL.trim() : ""
+  let url
   try {
-    parsed = JSON.parse(readFileSync(join(directory, "providers.json"), "utf8"))
+    url = new URL(said)
   } catch {
-    return []
+    return ""
   }
-  const names = namesOf(wanted)
-  const list = Array.isArray(parsed?.providers) ? parsed.providers : []
-  const out = []
-  for (const p of list) {
-    if (!p || typeof p.id !== "string" || !p.id.trim()) continue
-    const api = apiOf(p)
-    if (!api) continue
-    const id = p.id.trim()
-    const name = typeof p.name === "string" && p.name.trim() ? p.name.trim() : id
-    if (names && !names.includes(id.toLowerCase()) && !names.includes(name.toLowerCase())) continue
-    out.push({
-      id,
-      name,
-      api,
-      declared: declaredOf(p, api),
-      key: typeof p.key === "string" ? p.key : "",
-      npm: npmOf(p),
-      models: modelsOf(p),
-    })
+  return url.protocol === "http:" || url.protocol === "https:" ? said.replace(/\/+$/, "") : ""
+}
+
+// validateAddress is what the sign-in's address prompt takes: an address
+// the sidecar could reach. It says what is missing when none is there.
+export function validateAddress(value) {
+  const trouble = "An http(s) address, like https://api.example.com/v1"
+  const said = String(value ?? "").trim()
+  if (!said) return trouble
+  let url
+  try {
+    url = new URL(said)
+  } catch {
+    return trouble
+  }
+  return url.protocol === "http:" || url.protocol === "https:" ? undefined : trouble
+}
+
+// slugOf is the name an upstream is served under: its host and path,
+// kept short, with a few marks of the address beside them, so that two
+// addresses never share a name. It is a path segment, and a name.
+export function slugOf(address) {
+  let url
+  try {
+    url = new URL(address)
+  } catch {
+    return ""
+  }
+  const raw = `${url.host}${url.pathname.replace(/\/+$/, "")}`
+  const said = raw
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48)
+  const marks = createHash("sha256").update(address).digest("hex").slice(0, 8)
+  return `${said || "upstream"}-${marks}`
+}
+
+// listedOf asks an upstream for the models it serves, through the
+// sidecar, so that the listing is carried the way the requests are. It
+// answers them as the models of magpie, keyed under the upstream's own
+// name, or null when it said nothing.
+export async function listedOf(kind, address, key, port) {
+  const slug = slugOf(address)
+  if (!slug) return null
+  const base = `http://127.0.0.1:${port}/${slug}`
+  // An address with no path of its own has the version the kind wants
+  // put under the sidecar's base, so that a request can be made under
+  // it; the other kind keeps the base the loader gives.
+  const under = hasPath(address) ? "" : kind === "gemini" ? "/v1beta" : "/v1"
+  const said =
+    kind === "gemini"
+      ? geminiOf(await getOf(`${base}${under}/models?key=${encodeURIComponent(key)}`))
+      : openaiOf(await getOf(`${base}${under}/models`, kind === "anthropic" ? anthropicHeaders(key) : bearerHeaders(key)))
+  if (!said) return null
+  const out = {}
+  for (const m of said) {
+    const underBase = under ? `${base}${under}` : undefined
+    out[`${slug}-${m.id}`] = { name: m.name, api: { id: m.id, ...(underBase ? { url: underBase } : {}), npm: NPMS[kind] } }
   }
   return out
 }
 
-// wantedOf are the providers the user wants copied, as they wrote them
-// in the options: a name, a list of names, or nothing.
-//
-// A provider is named by its id or by the name it is shown under, and
-// it is matched without regard to case. Nothing wanted is no list: every
-// provider is wanted.
-export function wantedOf(options) {
-  const raw = options && typeof options === "object" ? options.providers : undefined
-  return namesOf(raw)
+// hasPath is whether the address the sign-in named carries a path of its
+// own (a /v1, a /v1beta), under which its models sit.
+function hasPath(address) {
+  try {
+    return new URL(address).pathname.replace(/\/+$/, "").length > 0
+  } catch {
+    return false
+  }
 }
 
-// namesOf are the names the user wrote, as they are to be matched: each
-// trimmed and lowercased, the empty ones left out. Nothing left is no
-// list at all.
-function namesOf(raw) {
-  const list = Array.isArray(raw) ? raw : [raw]
+// bearerHeaders are the headers a chat or Responses API wants.
+function bearerHeaders(key) {
+  return { authorization: `Bearer ${key}` }
+}
+
+// anthropicHeaders are the headers Anthropic's own API wants.
+function anthropicHeaders(key) {
+  return { ...bearerHeaders(key), "x-api-key": key, "anthropic-version": "2023-06-01" }
+}
+
+// getOf asks one address and answers its JSON, or null when it said
+// nothing of the kind. It waits a while, no longer.
+async function getOf(url, headers = {}) {
+  let said
+  try {
+    said = await fetch(url, { headers, signal: AbortSignal.timeout(10000) })
+  } catch {
+    return null
+  }
+  if (!said.ok) return null
+  try {
+    return await said.json()
+  } catch {
+    return null
+  }
+}
+
+// openaiOf is the models of an OpenAI-shaped answer: chat completions,
+// Responses, and Anthropic's own list, which is shaped the same way.
+function openaiOf(said) {
+  const list = Array.isArray(said?.data) ? said.data : []
   const out = []
-  for (const v of list) {
-    if (typeof v !== "string") continue
-    const t = v.trim().toLowerCase()
-    if (t && !out.includes(t)) out.push(t)
+  for (const m of list) {
+    const id = typeof m?.id === "string" ? m.id.trim() : ""
+    if (!id) continue
+    const name = typeof m?.name === "string" && m.name.trim()
+      ? m.name.trim()
+      : typeof m?.display_name === "string" && m.display_name.trim()
+        ? m.display_name.trim()
+        : id
+    out.push({ id, name })
   }
   return out.length ? out : null
 }
 
-// apiOf is the address of the API the user's provider is written with:
-// the one of the kind they picked, or the first that is there.
-function apiOf(p) {
-  const pick = (v) => (typeof v === "string" ? v.trim() : "")
-  const kind = kindOf(p)
-  if (kind === "responses") return pick(p.responses)
-  if (kind === "anthropic") return pick(p.anthropic)
-  if (kind === "gemini") return pick(p.gemini)
-  return pick(p.chat) || pick(p.responses) || pick(p.anthropic) || pick(p.gemini)
-}
-
-// kindOf is the kind of API the user's provider is written with: the one
-// they picked, else the chat one, which is what most of them speak.
-function kindOf(p) {
-  const kind = String(p.baseAPI ?? "").trim().toLowerCase()
-  return NPMS[kind] ? kind : "chat"
-}
-
-// declaredOf is the address the copy declares: the user's own address, as
-// magpie reads it.
-//
-// The Anthropic API is the one kind where the address is not said as it
-// is. magpie puts a "/v1" under the base of a model of that kind whose own
-// address ends in "/v1", so that the base the loader says (the sidecar's)
-// is a base a request can be made under. The sidecar puts the path of a
-// request under the address the upstream has, so the "/v1" has to be in
-// one of the two, not in both.
-function declaredOf(p, api) {
-  if (kindOf(p) !== "anthropic") return api
-  return api.replace(/\/v1$/, "")
-}
-
-// npmOf is the AI SDK package the provider's API is spoken on.
-function npmOf(p) {
-  return NPMS[kindOf(p)]
-}
-
-// modelsOf are the models the provider serves, as providers.json keeps
-// them: a list of ids.
-function modelsOf(p) {
-  const m = p.models
-  if (Array.isArray(m)) return m.filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim())
-  if (m && typeof m === "object") return Object.keys(m).filter((x) => x.trim())
-  return []
-}
-
-// modelsFor is what the config hook declares the copy's models as: magpie
-// reads a plugin provider's models from there, and asks no vendor for
-// them.
-function modelsFor(models) {
-  const out = {}
-  for (const id of models) out[id] = { name: id }
-  return out
-}
-
-// hooksFor are the hooks the copy of the provider has: the config that
-// declares the copy, so that magpie knows the models it serves, and the
-// sign-in that serves it, whose loader sends the requests to the
-// sidecar.
-export function hooksFor(provider, port = DEFAULT_PORT) {
-  const id = mirrorId(provider.id)
-  return {
-    config: async (cfg) => {
-      cfg.provider ??= {}
-      cfg.provider[id] ??= {
-        name: `${provider.name} (ECH)`,
-        npm: provider.npm,
-        api: provider.declared,
-        models: modelsFor(provider.models),
-      }
-    },
-    auth: {
-      provider: id,
-      methods: [{ type: "api", label: `${provider.name} (ECH) API key` }],
-      async loader(getAuth) {
-        const auth = await getAuth()
-        if (auth?.type !== "api") return {}
-        return {
-          baseURL: `http://127.0.0.1:${port}/${encodeURIComponent(provider.id)}`,
-          apiKey: auth.key,
-        }
-      },
-    },
+// geminiOf is the models of a Gemini answer: the "models/" before each
+// name is not part of the id the API wants.
+function geminiOf(said) {
+  const list = Array.isArray(said?.models) ? said.models : []
+  const out = []
+  for (const m of list) {
+    const id = typeof m?.name === "string" ? m.name.trim().replace(/^models\//, "") : ""
+    if (!id) continue
+    const name = typeof m?.displayName === "string" && m.displayName.trim() ? m.displayName.trim() : id
+    out.push({ id, name })
   }
+  return out.length ? out : null
 }

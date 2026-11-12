@@ -10,13 +10,12 @@ import {
   findSidecar,
   health,
   platformDir,
+  setUpstream,
   servesUpstreams,
-  setUpstreams,
   sidecarArgs,
   sidecarName,
   upstreams,
   upstreamFile,
-  writeUpstreams,
 } from "./sidecar.mjs"
 
 const temps = []
@@ -39,44 +38,40 @@ describe("upstreamFile", () => {
   })
 })
 
-describe("writeUpstreams", () => {
-  test("writes the address of every provider of the user's own", () => {
+describe("setUpstream", () => {
+  test("writes the address the sign-in named", () => {
     const dir = tempDir()
-    const wrote = writeUpstreams(dir, [
-      { id: "nvidia", api: "https://api.example.com/v1" },
-      { id: "amd", api: "https://other.example.com/v1" },
-    ])
-    expect(wrote).toEqual({
-      nvidia: "https://api.example.com/v1",
-      amd: "https://other.example.com/v1",
-    })
+    const wrote = setUpstream(dir, "nvidia", "https://api.example.com/v1")
+    expect(wrote).toEqual({ nvidia: "https://api.example.com/v1" })
     const said = JSON.parse(readFileSync(upstreamFile(dir), "utf8"))
     expect(said).toEqual(wrote)
   })
 
-  test("keeps the ECH config given by hand for a provider", () => {
+  test("keeps the upstreams the file already has", () => {
     const dir = tempDir()
     const file = upstreamFile(dir)
     mkdirSync(dirname(file), { recursive: true })
-    writeFileSync(
-      file,
-      JSON.stringify({ nvidia: { url: "https://old.example.com/v1", ech: "Y2VjaA==" } }),
-    )
-    const wrote = writeUpstreams(dir, [{ id: "nvidia", api: "https://new.example.com/v1" }])
+    writeFileSync(file, JSON.stringify({ amd: "https://other.example.com/v1" }))
+    const wrote = setUpstream(dir, "nvidia", "https://api.example.com/v1")
+    expect(wrote).toEqual({ nvidia: "https://api.example.com/v1", amd: "https://other.example.com/v1" })
+    const said = JSON.parse(readFileSync(file, "utf8"))
+    expect(said).toEqual(wrote)
+  })
+
+  test("keeps the ECH config given by hand for an upstream", () => {
+    const dir = tempDir()
+    const file = upstreamFile(dir)
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, JSON.stringify({ nvidia: { url: "https://old.example.com/v1", ech: "Y2VjaA==" } }))
+    const wrote = setUpstream(dir, "nvidia", "https://new.example.com/v1")
     expect(wrote.nvidia.url).toBe("https://new.example.com/v1")
     expect(wrote.nvidia.ech).toBe("Y2VjaA==")
   })
 
-  test("is nothing when there is no provider of the user's own", () => {
-    expect(writeUpstreams(tempDir(), [])).toEqual({})
-  })
-})
-
-describe("setUpstreams", () => {
-  test("is what the sidecar is to serve", () => {
+  test("answers the upstreams the sidecar is to serve", () => {
     const dir = tempDir()
-    setUpstreams(dir, [{ id: "nvidia", api: "https://api.example.com/v1" }])
-    expect(upstreams()).toEqual({ nvidia: "https://api.example.com/v1" })
+    setUpstream(dir, "nvidia", "https://api.example.com/v1")
+    expect(upstreams()).toMatchObject({ nvidia: "https://api.example.com/v1" })
   })
 })
 

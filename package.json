@@ -1,14 +1,13 @@
 {
   "name": "magpie-ech-middleware",
-  "version": "0.3.0",
-  "description": "Encrypted Client Hello for magpie: an ECH copy of every provider you wrote, so their traffic goes out with an encrypted client hello",
+  "version": "0.4.0",
+  "description": "Encrypted Client Hello for magpie: a provider signed in to with an upstream's address and key, whose traffic goes out with an encrypted client hello",
   "type": "module",
   "main": "./ech.plugin.js",
   "files": [
     "ech.plugin.js",
     "ech.providers.js",
     "ech.shared.js",
-    "ech.middleware.js",
     "ech.hooks.js",
     "sidecar.mjs",
     "sidecar/main.go",
@@ -24,7 +23,7 @@
   ],
   "keywords": [
     "magpie",
-    "magpie-middleware",
+    "magpie-plugin",
     "ech",
     "encrypted-client-hello",
     "tls",
@@ -41,13 +40,9 @@
     "test": "bun test"
   },
   "magpie": {
-    "middleware": "./ech.middleware.js",
     "hooks": "./ech.hooks.js",
     "options": {
-      "port": 8790,
-      "providers": "",
-      "failClosed": false,
-      "log": true
+      "port": 8790
     }
   }
 }

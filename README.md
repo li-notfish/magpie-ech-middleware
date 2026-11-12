@@ -1,228 +1,171 @@
 # magpie-ech-middleware
 
 Encrypted Client Hello (ECH) for [magpie](https://usemagpie.ai), as a
-provider plugin and a sidecar.
+provider and a sidecar.
 
 A network that blocks a domain by its TLS SNI cannot read the name inside
 an Encrypted Client Hello, so a connection that carries one goes through.
-This package gives every provider you wrote an ECH copy, so their traffic
-goes out with an encrypted client hello.
+With this package installed, magpie has one more provider, named **ECH**:
+it is signed in to the way a provider of your own is, with the address of
+the upstream and its key, and its traffic goes out through the sidecar,
+which makes the connection with an Encrypted Client Hello and forwards it
+to the vendor.
 
 ## What it does
 
-- **The plugin** (`ech.plugin.js`) reads the providers you wrote
-  (`providers.json`) and declares an ECH copy of each one that has an
-  address of its own: the copy of `nvidia` is `ech-nvidia`. Which of
-  them get a copy is what the `providers` option says. The copy's
-  api is the address your own provider has, so magpie keeps treating the
-  vendor as that vendor. Its loader sends the requests to the sidecar,
-  which makes the connection with an Encrypted Client Hello and forwards
-  it to the vendor. The copy is signed in with the key your own provider
-  has, so nothing is asked of you.
-- **The sidecar** (`sidecar/`) is a small Go program. It resolves each
-  upstream's ECH config over DoH, connects with an Encrypted Client
-  Hello, and forwards the requests to it.
-- **The middleware** (`ech.middleware.js`) runs in magpie's gateway and
-  keeps the traffic where it should be: it turns a request away that
-  names no copy when it fails closed, and it writes a line per try.
+- **The provider plugin** (`ech.plugin.js`) declares this ECH provider.
+  Signing in asks for three things: the address of the upstream (its
+  base URL), the kind of API the upstream speaks (Chat Completions,
+  Responses, Anthropic Messages, Gemini), and the upstream's key. The
+  models it lists are the upstream's own, asked for through the sidecar.
+- **The sidecar** (`sidecar/`) is a small Go program: it resolves each
+  upstream's ECH configuration over DoH, connects with an Encrypted
+  Client Hello, and forwards the requests.
 - **The hooks** (`ech.hooks.js`) run in Bun, in magpie's plugin host,
-  where a process can be started. They start the sidecar and keep it up.
+  where a process can be started: they bring the sidecar up and keep it
+  there.
 
-## Setup
+## Install
 
-### 1. Install the plugin
+### 1. Add the plugin
 
 ```sh
 magpie plugin add github:li-notfish/magpie-ech-middleware
 ```
 
-### 2. Add the providers you want to reach with ECH
+### 2. Sign in
 
-They are the ones you already wrote, in magpie's own settings
-(设置 → 供应商). A provider of another plugin is left alone: its address
-is that plugin's own business.
+Settings → Providers → ECH → sign in:
+
+| Asked | Given |
+| --- | --- |
+| Base URL | the address of the upstream, with its version path, like `https://api.example.com/v1` |
+| API | the kind of API the upstream speaks |
+| API key | the upstream's key |
 
 ### 3. Use it
 
-Every provider with an address of its own now has a copy named after it:
+An agent asks for `ech/<model>`, and the models are the ones the upstream
+lists. The requests go out through the sidecar: what the network sees is
+the cover name, not the vendor's.
 
-| your provider | its ECH copy |
-| --- | --- |
-| `nvidia` | `ech-nvidia` |
-| `amd` | `ech-amd` |
+## More than one upstream
 
-The agent asks for `ech-nvidia/<model>`, and the request goes out through
-the sidecar. The model is the one your own provider serves: the copy
-serves the same models, under the same names.
+A provider can be signed in to more than once: sign in again with another
+address and key, and that is another upstream. Two keys of the same vendor
+are fine. Each account serves the models it lists itself.
 
-Nothing is asked of you: the copy is signed in with the key your own
-provider already has.
+## Options
 
-To have a copy of one provider only, name it in the options (see below):
-
-```sh
-magpie plugin options magpie-ech-middleware '{"providers":"nvidia"}'
-```
-
-## The options
-
-They are the plugin's own, in `plugins.json`:
+All of them are the plugin's own, in `plugins.json`:
 `magpie plugin options <name> '<json>'`.
 
-| option | default | what it does |
+| Option | Default | What it does |
 | --- | --- | --- |
-| `port` | `8790` | the port the sidecar listens on |
-| `providers` | all of them | the providers to copy: a name, or a list of names |
-| `failClosed` | `false` | turn away a request that names no copy |
-| `log` | `true` | write a line per try into magpie's log |
+| `port` | `8790` | which port the sidecar listens on |
 
-`providers` says which of your providers get a copy. A provider is named
-by its id (`nvidia`) or by the name it is shown under (`NVIDIA`), in any
-case, and more than one of them is a list:
+The options are read when the plugin is loaded: when plugins.json changes,
+magpie loads the plugin again.
 
-```sh
-magpie plugin options magpie-ech-middleware '{"providers":"nvidia"}'
-magpie plugin options magpie-ech-middleware '{"providers":["nvidia","amd"]}'
-```
+## What a request goes through
 
-Left empty, every provider with an address of its own is copied. A name
-that is of no provider of yours copies nothing, and the plugin says so
-in the log.
+1. The plugin is loaded: every upstream that is signed in to is written
+   down for the sidecar to serve; listing the models or the first request
+   brings it up.
+2. An agent asks for `ech/<model>`. magpie routes it to the ECH provider,
+   whose loader says the base is
+   `http://127.0.0.1:8790/<the upstream's name>`.
+3. The sidecar connects to the address the sign-in named with an
+   Encrypted Client Hello: what the network sees is the cover name, not
+   the vendor's.
+4. The request reaches the vendor, and the answer comes back the way it
+   went.
 
-The option is read when the plugin is loaded, and magpie loads the
-plugin again when plugins.json changes: the next request is answered by
-the copies the option names.
+## Which upstreams the sidecar serves
 
-`failClosed` is what makes the guarantee real: it turns a request away
-whose model names no copy. A model that already names one is left alone.
-
-Without it, a request that names a bare model goes to the first provider
-in magpie's Providers order that serves it - your own provider, in the
- clear. The copies are made of keys, so nothing else in the middleware
-could have stopped that: a hook that passes an account over is only
-asked of a subscription account, and a try on a key asks no hook.
-
-Give a copy no fallback either: a provider that falls back to another
-one sends the request there when the copy cannot serve it.
-
-The options can also be edited in the GUI: 插件 → 已安装 → 这一行的选项.
-
-## What happens to a request
-
-1. The plugin is loaded: it writes the upstreams the sidecar is to serve
-   and starts the sidecar.
-2. The agent asks for `ech-nvidia/<model>`. magpie routes it to the copy
-   `ech-nvidia`, whose loader says the base is
-   `http://127.0.0.1:8790/nvidia`.
-3. The sidecar makes the TLS connection to the address of your own
-   provider with an Encrypted Client Hello: the network sees a cover
-   name, not the vendor's.
-4. The middleware writes one line: the model, the provider it went to,
-   and whether it went through the sidecar (`[ech]`) or not (`[direct]`).
-
-The sidecar's own lines (the cover name its ECH config uses, a request
-that failed) go to the host's log as well.
-
-## The upstreams the sidecar serves
-
-The plugin writes them into a file of its own, in magpie's folder:
+The plugin writes them into its own folder, in magpie's directory:
 
 ```
-<magpie's folder>/magpie-ech-middleware/upstreams.json
+<magpie's directory>/magpie-ech-middleware/upstreams.json
 ```
 
 ```json
 {
-  "nvidia": "https://api.example.com/v1"
+  "api-example-com-v1-9f86d081": "https://api.example.com/v1"
 }
 ```
 
-The sidecar reads the file again when it changes, so a provider added
-later is served without the sidecar being started again.
+Each name is one address a sign-in named. The sidecar watches this file
+and reads it again when it changes: an upstream signed in to later is
+served without the sidecar being started again.
 
-A provider that publishes no ECH config can be given one by hand, in the
-same file:
+An upstream that publishes no ECH configuration can be given one by hand:
 
 ```json
 {
-  "nvidia": { "url": "https://api.example.com/v1", "ech": "<base64 ECHConfigList>" }
+  "api-example-com-v1-9f86d081": { "url": "https://api.example.com/v1", "ech": "<base64 ECHConfigList>" }
 }
 ```
 
-## The sidecar on its own
+## Running the sidecar on its own
 
-The sidecar is a program of its own and can be run by hand:
+The sidecar is a program of its own, and can be run by hand:
 
 ```sh
 sidecar/bin/win32-x64/ech-sidecar.exe -upstreams-file upstreams.json -listen 127.0.0.1:8790
 ```
 
-It writes one JSON line to its stdout when it is listening:
+Once it is listening, it writes one line of JSON to its stdout:
 
 ```json
-{"ok":true,"port":8790,"upstreams":{"nvidia":{"url":"https://api.example.com/v1","ech":false,"cover":""}}}
+{"ok":true,"port":8790,"upstreams":{"api-example-com-v1-9f86d081":{"url":"https://api.example.com/v1","ech":false,"cover":""}}}
 ```
 
-That line says the sidecar is listening. The ECH config is looked up
-afterwards, in the background, so `ech` is false and `cover` is empty in
-it: the line is a readiness signal, not a statement about the handshake.
-`/_ech/health` answers with the state as it is now, without touching the
-vendor:
+That line says it is listening. The ECH configuration is looked up after,
+in the background, so `ech` is false and `cover` is empty in it: it is a
+signal that it is ready, not the conclusion of a handshake. `/_ech/health`
+answers with the state of this moment, without touching the vendor:
 
 ```json
-{"ok":true,"upstreams":{"nvidia":{"url":"https://api.example.com/v1","ech":true,"cover":"example.com"}}}
+{"ok":true,"upstreams":{"api-example-com-v1-9f86d081":{"url":"https://api.example.com/v1","ech":true,"cover":"example.com"}}}
 ```
 
-`ech` says whether a config list is in use, and `cover` is the name the
-outer hello carries - the one a network sees.
+`ech` says whether a configuration list is in use, and `cover` is the name
+the outer hello carries — the name the network sees.
 
 A request is served by the upstream its path names:
-`/nvidia/chat/completions` goes to the upstream `nvidia`, under the
-address that upstream has.
+`/<the upstream's name>/chat/completions` goes to that upstream, under the
+address it has.
 
-The binaries for the platforms the package covers are in
-`sidecar/bin/<platform>-<arch>/`, so an install needs no Go at all:
+The binaries of the platforms the package covers are in
+`sidecar/bin/<platform>-<arch>/`, so installing is enough, with no Go:
 
-| platform | folder |
+| Platform | Folders |
 | --- | --- |
 | Windows x64 / arm64 | `sidecar/bin/win32-x64`, `sidecar/bin/win32-arm64` |
 | Linux x64 / arm64 | `sidecar/bin/linux-x64`, `sidecar/bin/linux-arm64` |
 | macOS x64 / arm64 | `sidecar/bin/darwin-x64`, `sidecar/bin/darwin-arm64` |
 
-The Go source is beside them for the platforms that have no binary: the
-package builds it when it is missing and the machine has Go 1.26 or
-newer (the first release whose `crypto/tls` speaks Encrypted Client
-Hello):
+A platform without a binary has the Go source beside it: when the machine
+has Go 1.26 or newer (the first `crypto/tls` that speaks Encrypted Client
+Hello), the package builds it:
 
 ```sh
 npm run build
 ```
 
-## Troubleshooting
+## When something is wrong
 
-- **No copy of a provider appears** - the provider has no address of its
-  own (it is another plugin's provider), the `providers` option names
-  another one, or there are more than sixteen providers with an address.
-- **The log says `[direct]`** - the request did not go through the
-  sidecar: the model it named is not a copy's.
-- **The sidecar says it has no ECH config** - the vendor's DNS record
-  carries no `ech` parameter. A relay's hostname does not, so the
-  sidecar goes on without one when it is started with
-  `ECH_SIDECAR_ALLOW_PLAIN=1`.
-- **A provider needs a config of its own** - give it one in the upstreams
-  file, as above.
-
-## The tests
-
-```sh
-bun test
-```
-
-They cover the plugin (the copies it makes, the sign-in and the loader
-each of them has), the middleware's hooks (what it does to a request, to
-an account and to a try) and the keeper (where the sidecar is, what it is
-to serve, how it is asked whether it is up).
-
-## License
-
-MIT.
+- **The models do not list** — the address is not right, the sidecar is
+  not up, or the upstream has no endpoint that lists models: the models
+  stay as they were, and magpie's log says so. A sign-in of an earlier
+  version names no address: sign in again.
+- **An upstream publishes no ECH configuration** — no HTTPS record, or
+  none with `ech` in it: one can be given by hand in upstreams.json
+  (see above).
+- **In a hurry, and this one connection may go in the clear** — set
+  `ECH_SIDECAR_ALLOW_PLAIN=1` and restart magpie: an upstream no ECH
+  configuration is found for goes out without one.
+- **The sidecar does not start** — on a platform without a binary, run
+  `npm run build` first; when the port is taken, give another in the
+  options.

@@ -1,26 +1,23 @@
 # magpie-ech-middleware
 
 给 [magpie](https://usemagpie.ai) 用的 Encrypted Client Hello（ECH），形态是
-供应商插件 + sidecar。
+一个供应商 + sidecar。
 
 按 TLS SNI 拦域名的网络读不到 Encrypted Client Hello 里的名字，所以带 ECH 的
-连接能过去。这个包给你自己写的每一个供应商都做一份 ECH 副本，它们的流量于是
-都带 ECH 出去。
+连接能过去。装上这个包，magpie 里多一个叫 **ECH** 的供应商：像自定义供应商
+一样登录——填上游的地址和 Key——它的流量就从 sidecar 出去，sidecar 用
+Encrypted Client Hello 建连再转发给厂商。
 
-## 包里四块
+## 包里三块
 
-- **插件**（`ech.plugin.js`）读你自己写的供应商（`providers.json`），给其中每一个
-  有自己地址的供应商声明一份 ECH 副本：`nvidia` 的副本叫 `ech-nvidia`。给哪几个
-  做由 `providers` 选项说了算。副本的 api 就是你自己那个供应商的地址，所以 magpie
-  仍然把这一家当这一家看待。副本的
-  loader 把请求发到 sidecar，由 sidecar 用 Encrypted Client Hello 建连再转发给
-  厂商。副本用你自己那个供应商的 key 登录，所以什么都不用问你。
-- **sidecar**（`sidecar/`）是一个小的 Go 程序：通过 DoH 解析每个上游的 ECH 配置，
-  用 Encrypted Client Hello 建连，再把请求转发过去。
-- **中间件**（`ech.middleware.js`）跑在 magpie 的网关里，盯住流量该去哪儿：
-  `failClosed` 打开时把没点名副本的请求拒掉，并且给每次尝试写一行日志。
-- **hooks**（`ech.hooks.js`）跑在 Bun 里（magpie 的插件宿主），那里可以起进程：
-  由它把 sidecar 拉起来并维持。
+- **供应商插件**（`ech.plugin.js`）声明这个 ECH 供应商。登录时问三样：上游的
+  地址（Base URL）、上游说的是哪种 API（Chat Completions、Responses、
+  Anthropic Messages、Gemini）、上游的 Key。它列出的模型就是上游自己的模型，
+  从 sidecar 那边问来的。
+- **sidecar**（`sidecar/`）是一个小的 Go 程序：通过 DoH 解析每个上游的 ECH
+  配置，用 Encrypted Client Hello 建连，再把请求转发过去。
+- **hooks**（`ech.hooks.js`）跑在 Bun 里（magpie 的插件宿主），那里可以起
+  进程：由它把 sidecar 拉起来并维持。
 
 ## 安装步骤
 
@@ -30,30 +27,25 @@
 magpie plugin add github:li-notfish/magpie-ech-middleware
 ```
 
-### 2. 把要走的供应商写好
+### 2. 登录
 
-就是你已经写好的那些，在 magpie 自己的设置里（设置 → 供应商）。别的插件带来的
-供应商不动：它的地址是那个插件自己的事。
+设置 → 供应商 → ECH → 登录：
+
+| 问的 | 填的 |
+| --- | --- |
+| Base URL | 上游的地址，连它的版本路径一起填，比如 `https://api.example.com/v1` |
+| API | 上游说的是哪种 API |
+| API key | 上游的 Key |
 
 ### 3. 用起来
 
-每一个自己有地址的供应商，现在都有一份以它命名的副本：
+agent 问 `ech/<模型>`，模型就是上游列出的那些。请求从 sidecar 出去，网络上
+看到的是掩护名，不是厂商的名字。
 
-| 你的供应商 | 它的 ECH 副本 |
-| --- | --- |
-| `nvidia` | `ech-nvidia` |
-| `amd` | `ech-amd` |
+## 多个上游
 
-agent 问 `ech-nvidia/<模型>`，请求于是从 sidecar 出去。模型还是你自己那个供应商
- 服务的那一个：副本用同样的模型、同样的名字。
-
-不用你做任何事：副本用你自己那个供应商已有的 key 登录。
-
-只想给其中一个供应商做副本，就在选项里点名它（见下面）：
-
-```sh
-magpie plugin options magpie-ech-middleware '{"providers":"nvidia"}'
-```
+一个供应商可以登录多次：再登录一次，填另一个地址和 Key，就是另一个上游。
+同一个厂商的两个 Key 也没问题。每个账号只承接它自己列出的模型。
 
 ## 选项
 
@@ -63,45 +55,18 @@ magpie plugin options magpie-ech-middleware '{"providers":"nvidia"}'
 | 选项 | 默认 | 做什么 |
 | --- | --- | --- |
 | `port` | `8790` | sidecar 监听哪个端口 |
-| `providers` | 全部 | 给哪几个做副本：一个名字，或者一串名字 |
-| `failClosed` | `false` | 把没点名副本的请求拒掉 |
-| `log` | `true` | 每次尝试往 magpie 的日志里写一行 |
 
-`providers` 说给哪几个供应商做副本。名字可以是 id（`nvidia`），也可以是界面上显示
-的名字（`NVIDIA`），大小写不管；要多个就写一串：
-
-```sh
-magpie plugin options magpie-ech-middleware '{"providers":"nvidia"}'
-magpie plugin options magpie-ech-middleware '{"providers":["nvidia","amd"]}'
-```
-
-留空就是每一个自己有地址的供应商都做一份。写的名字不是你写过的供应商，就一个都
-不做，插件会在日志里说一声。
-
-选项是插件加载的时候读的，plugins.json 变了 magpie 会重新加载插件：下一个请求
-就是由这个选项点名的那些副本来答。
-
-`failClosed` 才是保证本身：把模型没点名副本的请求拒掉，已经点名了副本的不动。
-
-不打开它的时候，只写了模型名的请求会落到 magpie 的 Providers 顺序里第一个能
-服务它的供应商——也就是你自己那个供应商，明文出去。副本是 key 型的，中间件里
-没有别的东西能挡这个：跳过账号的钩子只对订阅账号触发，走 key 的尝试不问钩子。
-
-也别给副本配 fallback：配了之后，副本接不住时请求会被送到别的供应商去。
-
-选项也能在界面里改：插件 → 已安装 → 这一行的选项。
+选项是插件加载的时候读的，plugins.json 变了 magpie 会重新加载插件。
 
 ## 一个请求会经过什么
 
-1. 插件被加载：它把 sidecar 要服务的上游写下来，并把 sidecar 拉起来。
-2. agent 问 `ech-nvidia/<模型>`。magpie 把它路由给副本 `ech-nvidia`，副本的
-   loader 说 base 是 `http://127.0.0.1:8790/nvidia`。
-3. sidecar 用 Encrypted Client Hello 跟你自己那个供应商的地址建连：网络上看到
-   的是掩护名，不是厂商的名字。
-4. 中间件写一行日志：模型、落到哪个供应商、走了 sidecar（`[ech]`）还是没走
-   （`[direct]`）。
-
-sidecar 自己的日志（ECH 配置用的掩护名、失败的请求）也会进宿主的日志。
+1. 插件被加载：登录过的每个上游被写进 sidecar 要服务的名单；拉模型或第一个
+   请求都会把 sidecar 拉起来。
+2. agent 问 `ech/<模型>`。magpie 把它路由给 ECH 供应商，这个账号的 loader 说
+   base 是 `http://127.0.0.1:8790/<上游的名字>`。
+3. sidecar 用 Encrypted Client Hello 跟上游的地址建连：网络上看到的是掩护名，
+   不是厂商的名字。
+4. 请求到了厂商，回答原路回来。
 
 ## sidecar 服务哪些上游
 
@@ -113,17 +78,18 @@ sidecar 自己的日志（ECH 配置用的掩护名、失败的请求）也会�
 
 ```json
 {
-  "nvidia": "https://api.example.com/v1"
+  "api-example-com-v1-9f86d081": "https://api.example.com/v1"
 }
 ```
 
-sidecar 会盯着这个文件，变了就重读：后来加的供应商不用重启 sidecar 就能服务。
+每个名字就是登录时填的一个地址。sidecar 会盯着这个文件，变了就重读：后来
+登录的上游不用重启 sidecar 就能服务。
 
 不发布 ECH 配置的供应商，可以在这个文件里手写一份：
 
 ```json
 {
-  "nvidia": { "url": "https://api.example.com/v1", "ech": "<base64 的 ECHConfigList>" }
+  "api-example-com-v1-9f86d081": { "url": "https://api.example.com/v1", "ech": "<base64 的 ECHConfigList>" }
 }
 ```
 
@@ -138,7 +104,7 @@ sidecar/bin/win32-x64/ech-sidecar.exe -upstreams-file upstreams.json -listen 127
 它监听起来之后往 stdout 写一行 JSON：
 
 ```json
-{"ok":true,"port":8790,"upstreams":{"nvidia":{"url":"https://api.example.com/v1","ech":false,"cover":""}}}
+{"ok":true,"port":8790,"upstreams":{"api-example-com-v1-9f86d081":{"url":"https://api.example.com/v1","ech":false,"cover":""}}}
 ```
 
 这行说的是它监听起来没有。ECH 配置是之后在后台查的，所以这行里 `ech` 是
@@ -146,14 +112,14 @@ false、`cover` 是空的：它是就绪信号，不是握手的结论。`/_ech/
 此刻的状态，不碰厂商：
 
 ```json
-{"ok":true,"upstreams":{"nvidia":{"url":"https://api.example.com/v1","ech":true,"cover":"example.com"}}}
+{"ok":true,"upstreams":{"api-example-com-v1-9f86d081":{"url":"https://api.example.com/v1","ech":true,"cover":"example.com"}}}
 ```
 
 `ech` 说有没有在用配置列表，`cover` 是外面那个 hello 带的掩护名，也就是网络上
 看到的那个名字。
 
-请求由路径里点名的上游来服务：`/nvidia/chat/completions` 走到上游 `nvidia`，
-挂在那个上游自己的地址底下。
+请求由路径里点名的上游来服务：`/<上游的名字>/chat/completions` 走到那个上游，
+挂在它自己的地址底下。
 
 包覆盖的平台的二进制在 `sidecar/bin/<平台>-<架构>/`，所以装上就能用，不需要
 Go：
@@ -173,23 +139,12 @@ npm run build
 
 ## 出问题时
 
-- **某个供应商没有副本** —— 它没有自己的地址（是别的插件的供应商），`providers`
-  选项点的是别的名字，或者有地址的供应商超过十六个。
-- **日志里写着 `[direct]`** —— 这个请求没走 sidecar：它问的模型不是副本的。
-- **sidecar 说没有 ECH 配置** —— 厂商的 DNS 记录里没有 `ech` 参数。中转站的
-  主机名就没有，这时用 `ECH_SIDECAR_ALLOW_PLAIN=1` 启动 sidecar，它会不加密也
-  继续。
-- **某个供应商要自己的一份配置** —— 在上面的上游文件里给它写一份。
-
-## 测试
-
-```sh
-bun test
-```
-
-覆盖的是插件（它做的副本、每个副本的登录与 loader）、中间件的钩子（它对请求、
-账号、尝试做了什么）和 keeper（sidecar 在哪、要服务什么、怎么问它是否在）。
-
-## 许可
-
-MIT。
+- **模型列不出来** —— 地址不对、sidecar 没起来，或者上游没有模型列表的
+  端点：模型就保持原样，magpie 的日志里会说一声。旧版本登录的账号没有
+  存下地址：重新登录一次。
+- **某个上游没有 ECH 配置** —— 它不发布 HTTPS 记录，或者记录里没有 `ech`：
+  可以在 upstreams.json 里手写一份（见上）。
+- **急着用、不在乎这一条明文** —— 设 `ECH_SIDECAR_ALLOW_PLAIN=1` 再重启
+  magpie：查不到 ECH 配置的上游会明文连出去。
+- **sidecar 起不来** —— 没有二进制的平台先 `npm run build`；端口被占了就在
+  选项里换一个。

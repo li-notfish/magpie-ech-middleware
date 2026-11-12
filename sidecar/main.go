@@ -11,8 +11,8 @@
 //
 //	ech-sidecar -upstreams-file upstreams.json [-listen 127.0.0.1:8790]
 //
-// The upstreams file is a JSON object: each name is a provider of the
-// user's own, and each address is where that provider is reached.
+// The upstreams file is a JSON object: each name is an upstream the
+// plugin serves, and each address is where that upstream is reached.
 //
 //	{"nvidia": "https://api.example.com/v1"}
 //

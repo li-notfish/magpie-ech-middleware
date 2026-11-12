@@ -2,9 +2,8 @@
 // it is asked whether it is up.
 //
 // This file runs in Bun, in magpie's plugin host, where a process can be
-// started. The middleware (ech.middleware.js) runs in the gateway, on
-// moejs, where none can be: the Encrypted Client Hello needs Go's
-// crypto/tls, so the sidecar is a program of its own.
+// started: the Encrypted Client Hello needs Go's crypto/tls, so the
+// sidecar is a program of its own.
 //
 // The sidecar's binaries are in the package itself, in
 // sidecar/bin/<platform>-<arch>/, so a machine that runs one of the
@@ -12,11 +11,11 @@
 // for the platforms that have no binary: the package builds it when it
 // is missing and this computer has Go.
 //
-// The upstreams the sidecar talks to are the providers the user wrote:
-// the plugin writes them into a file of its own, in magpie's folder, and
+// The upstreams the sidecar talks to are the ones the user signed in to:
+// the plugin writes each into a file of its own, in magpie's folder, and
 // the sidecar reads that file (and reads it again when it changes). So
-// the published package carries no address of anyone's, and a provider
-// added later is served without the sidecar being started again.
+// the published package carries no address of anyone's, and an upstream
+// signed in to later is served without the sidecar being started again.
 import { spawn } from "node:child_process"
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import http from "node:http"
@@ -42,9 +41,8 @@ const RETRY = 30000
 // upstream.
 const HEALTH_PATH = "/_ech/health"
 
-// NO_UPSTREAMS is what the keeper says when there is no provider of the
-// user's own to serve.
-const NO_UPSTREAMS = "no provider of your own has an address: there is nothing for the sidecar to talk to"
+// NO_UPSTREAMS is what the keeper says when no upstream is signed in to.
+const NO_UPSTREAMS = "no upstream is signed in to: there is nothing for the sidecar to talk to"
 
 // FOLDER is the folder of the plugin's own, in magpie's folder, where
 // the upstreams are written.
@@ -61,12 +59,13 @@ export function upstreamFile(directory = configDirectory) {
   return join(directory, FOLDER, "upstreams.json")
 }
 
-// writeUpstreams writes the upstreams the sidecar serves: the name of
-// each provider of the user's own and the address it is reached at.
+// setUpstream writes one upstream down for the sidecar to serve: the
+// name an account's address is served under, and the address itself.
 //
-// What the file says more than that is kept: an ECH config given by
-// hand for a provider that publishes none.
-export function writeUpstreams(directory, providers) {
+// What the file says beside it is kept: the other accounts' upstreams,
+// and an ECH config given by hand for an upstream that publishes none.
+export function setUpstream(directory, id, address) {
+  configDirectory = directory
   const file = upstreamFile(directory)
   let was = {}
   try {
@@ -74,26 +73,17 @@ export function writeUpstreams(directory, providers) {
   } catch {
     was = {}
   }
-  const out = {}
-  for (const p of providers) {
-    const had = was?.[p.id]
-    out[p.id] = had && typeof had === "object" && typeof had.url === "string" ? { ...had, url: p.api } : p.api
-  }
+  const had = was && typeof was === "object" ? was[id] : undefined
+  const said = had && typeof had === "object" && typeof had.url === "string" ? { ...had, url: address } : address
+  const out = { ...(was && typeof was === "object" ? was : {}), [id]: said }
   try {
     mkdirSync(dirname(file), { recursive: true })
     writeFileSync(file, `${JSON.stringify(out, null, 2)}\n`)
   } catch (error) {
     console.error(`[ech] the upstreams could not be written: ${error?.message ?? error}`)
   }
+  wanted = { ...wanted, [id]: said }
   return out
-}
-
-// setUpstreams is the upstreams the sidecar is to serve: the providers
-// the user wrote, written down for the sidecar to read.
-export function setUpstreams(directory, providers) {
-  configDirectory = directory
-  wanted = writeUpstreams(directory, providers)
-  return wanted
 }
 
 // upstreams is what the sidecar is to serve, as it was written down.
