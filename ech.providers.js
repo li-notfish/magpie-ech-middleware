@@ -82,8 +82,10 @@ export function slugOf(address) {
 
 // listedOf asks an upstream for the models it serves, through the
 // sidecar, so that the listing is carried the way the requests are. It
-// answers them as the models of magpie, keyed under the upstream's own
-// name, or null when it said nothing.
+// answers them keyed by the id the upstream gave, the way magpie keys
+// its own: magpie keeps a list per account, so the ids of two upstreams
+// never meet, and a model is named ech/<the id, and nothing more>. It
+// answers null when the upstream said nothing.
 export async function listedOf(kind, address, key, port) {
   const slug = slugOf(address)
   if (!slug) return null
@@ -100,7 +102,7 @@ export async function listedOf(kind, address, key, port) {
   const out = {}
   for (const m of said) {
     const underBase = under ? `${base}${under}` : undefined
-    out[`${slug}-${m.id}`] = { name: m.name, api: { id: m.id, ...(underBase ? { url: underBase } : {}), npm: NPMS[kind] } }
+    out[m.id] = { name: m.name, api: { id: m.id, ...(underBase ? { url: underBase } : {}), npm: NPMS[kind] } }
   }
   return out
 }

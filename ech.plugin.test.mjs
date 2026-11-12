@@ -119,7 +119,7 @@ describe("the loader of an account", () => {
 })
 
 describe("the models of an account", () => {
-  test("are the upstream's own, keyed under its name", async () => {
+  test("are the upstream's own, keyed by the id the upstream gave", async () => {
     // A sidecar of our own: what the listing asks, it answers.
     const address = "https://api.example.com/v1"
     const slug = slugOf(address)
@@ -137,8 +137,8 @@ describe("the models of an account", () => {
       const port = server.address().port
       const said = await listedOf("chat", address, "sk-1", port)
       expect(said).toEqual({
-        [`${slug}-gpt-4o`]: { name: "gpt-4o", api: { id: "gpt-4o", npm: "@ai-sdk/openai-compatible" } },
-        [`${slug}-gpt-4o-mini`]: { name: "GPT-4o mini", api: { id: "gpt-4o-mini", npm: "@ai-sdk/openai-compatible" } },
+        "gpt-4o": { name: "gpt-4o", api: { id: "gpt-4o", npm: "@ai-sdk/openai-compatible" } },
+        "gpt-4o-mini": { name: "GPT-4o mini", api: { id: "gpt-4o-mini", npm: "@ai-sdk/openai-compatible" } },
       })
     } finally {
       server.close()
@@ -172,7 +172,7 @@ describe("the models of an account", () => {
         auth: { type: "api", key: "sk-1", metadata: { baseURL: address, kind: "chat" } },
       })
       expect(got).toEqual({
-        [`${slug}-gpt-4o`]: { name: "gpt-4o", api: { id: "gpt-4o", npm: "@ai-sdk/openai-compatible" } },
+        "gpt-4o": { name: "gpt-4o", api: { id: "gpt-4o", npm: "@ai-sdk/openai-compatible" } },
       })
       const said = JSON.parse(readFileSync(upstreamFile(temps.at(-1)), "utf8"))
       expect(said[slug]).toBe(address)
