@@ -137,8 +137,18 @@ describe("the models of an account", () => {
       const port = server.address().port
       const said = await listedOf("chat", address, "sk-1", port)
       expect(said).toEqual({
-        "gpt-4o": { name: "gpt-4o", api: { id: "gpt-4o", npm: "@ai-sdk/openai-compatible" } },
-        "gpt-4o-mini": { name: "GPT-4o mini", api: { id: "gpt-4o-mini", npm: "@ai-sdk/openai-compatible" } },
+        "gpt-4o": {
+          name: "gpt-4o",
+          api: { id: "gpt-4o", npm: "@ai-sdk/openai-compatible" },
+          capabilities: { reasoning: true },
+          variants: { low: { reasoningEffort: "low" }, medium: { reasoningEffort: "medium" }, high: { reasoningEffort: "high" } },
+        },
+        "gpt-4o-mini": {
+          name: "GPT-4o mini",
+          api: { id: "gpt-4o-mini", npm: "@ai-sdk/openai-compatible" },
+          capabilities: { reasoning: true },
+          variants: { low: { reasoningEffort: "low" }, medium: { reasoningEffort: "medium" }, high: { reasoningEffort: "high" } },
+        },
       })
     } finally {
       server.close()
@@ -172,7 +182,12 @@ describe("the models of an account", () => {
         auth: { type: "api", key: "sk-1", metadata: { baseURL: address, kind: "chat" } },
       })
       expect(got).toEqual({
-        "gpt-4o": { name: "gpt-4o", api: { id: "gpt-4o", npm: "@ai-sdk/openai-compatible" } },
+        "gpt-4o": {
+          name: "gpt-4o",
+          api: { id: "gpt-4o", npm: "@ai-sdk/openai-compatible" },
+          capabilities: { reasoning: true },
+          variants: { low: { reasoningEffort: "low" }, medium: { reasoningEffort: "medium" }, high: { reasoningEffort: "high" } },
+        },
       })
       const said = JSON.parse(readFileSync(upstreamFile(temps.at(-1)), "utf8"))
       expect(said[slug]).toBe(address)
@@ -183,6 +198,33 @@ describe("the models of an account", () => {
 
   test("are none when nothing answers", async () => {
     expect(await listedOf("chat", "https://api.example.com/v1", "sk-1", 1)).toBe(null)
+  })
+
+  test("name no levels for the kinds that think by a budget of their own", async () => {
+    const address = "https://api.example.com/v1"
+    const slug = slugOf(address)
+    const server = http.createServer((req, res) => {
+      res.setHeader("content-type", "application/json")
+      if (req.url === `/${slug}/models`) {
+        res.end(JSON.stringify({ data: [{ id: "claude-sonnet-4-5" }] }))
+        return
+      }
+      res.writeHead(404)
+      res.end()
+    })
+    await new Promise((done) => server.listen(0, "127.0.0.1", done))
+    try {
+      const said = await listedOf("anthropic", address, "sk-1", server.address().port)
+      expect(said).toEqual({
+        "claude-sonnet-4-5": {
+          name: "claude-sonnet-4-5",
+          api: { id: "claude-sonnet-4-5", npm: "@ai-sdk/anthropic" },
+          capabilities: { reasoning: true },
+        },
+      })
+    } finally {
+      server.close()
+    }
   })
 
   test("keep the ones known when the sign-in is not a key", async () => {

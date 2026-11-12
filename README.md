@@ -17,7 +17,9 @@ to the vendor.
   Signing in asks for three things: the address of the upstream (its
   base URL), the kind of API the upstream speaks (Chat Completions,
   Responses, Anthropic Messages, Gemini), and the upstream's key. The
-  models it lists are the upstream's own, asked for through the sidecar.
+  models it lists are the upstream's own, asked for through the sidecar,
+  and each carries the levels of thought (low, medium, high) an agent may
+  ask it at.
 - **The sidecar** (`sidecar/`) is a small Go program: it resolves each
   upstream's ECH configuration over DoH, connects with an Encrypted
   Client Hello, and forwards the requests.

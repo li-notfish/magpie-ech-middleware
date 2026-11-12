@@ -80,6 +80,23 @@ export function slugOf(address) {
   return `${said || "upstream"}-${marks}`
 }
 
+// EFFORTS are the levels of thought a model of the openai kinds is asked
+// at, weakest first, as the variants magpie offers (the reasoningEffort
+// that @ai-sdk/openai-compatible asks an effort by). A listing of models
+// says nothing of the levels a model takes, so the three OpenCode knows
+// are offered beside each, and the user picks among them.
+const EFFORTS = ["low", "medium", "high"]
+
+// variantsOf is the levels of thought offered for a kind of API: the
+// openai kinds ask an effort by, and the other two think by a budget of
+// their own, which a listing of models does not speak of, so they are
+// offered none.
+function variantsOf(kind) {
+  return kind === "chat" || kind === "responses"
+    ? Object.fromEntries(EFFORTS.map((e) => [e, { reasoningEffort: e }]))
+    : undefined
+}
+
 // listedOf asks an upstream for the models it serves, through the
 // sidecar, so that the listing is carried the way the requests are. It
 // answers them keyed by the id the upstream gave, the way magpie keys
@@ -99,10 +116,16 @@ export async function listedOf(kind, address, key, port) {
       ? geminiOf(await getOf(`${base}${under}/models?key=${encodeURIComponent(key)}`))
       : openaiOf(await getOf(`${base}${under}/models`, kind === "anthropic" ? anthropicHeaders(key) : bearerHeaders(key)))
   if (!said) return null
+  const variants = variantsOf(kind)
   const out = {}
   for (const m of said) {
     const underBase = under ? `${base}${under}` : undefined
-    out[m.id] = { name: m.name, api: { id: m.id, ...(underBase ? { url: underBase } : {}), npm: NPMS[kind] } }
+    out[m.id] = {
+      name: m.name,
+      api: { id: m.id, ...(underBase ? { url: underBase } : {}), npm: NPMS[kind] },
+      capabilities: { reasoning: true },
+      ...(variants ? { variants } : {}),
+    }
   }
   return out
 }

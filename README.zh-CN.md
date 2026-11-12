@@ -13,7 +13,7 @@ Encrypted Client Hello 建连再转发给厂商。
 - **供应商插件**（`ech.plugin.js`）声明这个 ECH 供应商。登录时问三样：上游的
   地址（Base URL）、上游说的是哪种 API（Chat Completions、Responses、
   Anthropic Messages、Gemini）、上游的 Key。它列出的模型就是上游自己的模型，
-  从 sidecar 那边问来的。
+  从 sidecar 那边问来的，每个模型带低/中/高三档思考等级可选。
 - **sidecar**（`sidecar/`）是一个小的 Go 程序：通过 DoH 解析每个上游的 ECH
   配置，用 Encrypted Client Hello 建连，再把请求转发过去。
 - **hooks**（`ech.hooks.js`）跑在 Bun 里（magpie 的插件宿主），那里可以起
