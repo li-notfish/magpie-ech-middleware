@@ -18,10 +18,11 @@ const NPMS = {
 
 // LIST_WAIT is how long a listing may take. The first one gives the sidecar
 // time to resolve the upstream's ECH config over DoH, fall back to the
-// built-in config, and retry with plain TLS when the edge rejects that config:
-// for a Cloudflare host whose HTTPS record is stripped, all three happen
-// before the listing itself is answered.
-const LIST_WAIT = 30000
+// built-in config, and retry with plain TLS when the edge rejects that config.
+// Magpie gives a provider's model list 20 seconds, so this fetch gives up
+// first and the listing keeps the models it had instead of the host reporting
+// a plugin that finished late.
+const LIST_WAIT = 15000
 
 // KINDS is the kinds of API an upstream may speak, as the sign-in asks
 // them: the first is what most of them speak.
@@ -111,7 +112,7 @@ function variantsOf(kind) {
 // its own: magpie keeps a list per account, so the ids of two upstreams
 // never meet, and a model is named ech/<the id, and nothing more>. It
 // answers null when the upstream said nothing.
-export async function listedOf(kind, address, key, port) {
+export async function listedOf(kind, address, key, port, wait = LIST_WAIT) {
   const slug = slugOf(address)
   if (!slug) return null
   const base = `http://127.0.0.1:${port}/${slug}`
@@ -119,10 +120,13 @@ export async function listedOf(kind, address, key, port) {
   // put under the sidecar's base, so that a request can be made under
   // it; the other kind keeps the base the loader gives.
   const under = hasPath(address) ? "" : kind === "gemini" ? "/v1beta" : "/v1"
+  const waitMs = Number.isFinite(wait) && wait > 0 ? wait : LIST_WAIT
   const said =
     kind === "gemini"
-      ? geminiOf(await getOf(`${base}${under}/models?key=${encodeURIComponent(key)}`))
-      : openaiOf(await getOf(`${base}${under}/models`, kind === "anthropic" ? anthropicHeaders(key) : bearerHeaders(key)))
+      ? geminiOf(await getOf(`${base}${under}/models?key=${encodeURIComponent(key)}`, {}, waitMs))
+      : openaiOf(
+          await getOf(`${base}${under}/models`, kind === "anthropic" ? anthropicHeaders(key) : bearerHeaders(key), waitMs),
+        )
   if (!said) return null
   const variants = variantsOf(kind)
   const out = {}
@@ -160,10 +164,10 @@ function anthropicHeaders(key) {
 
 // getOf asks one address and answers its JSON, or null when it said
 // nothing of the kind. It waits a while, no longer.
-async function getOf(url, headers = {}) {
+async function getOf(url, headers = {}, wait = LIST_WAIT) {
   let said
   try {
-    said = await fetch(url, { headers, signal: AbortSignal.timeout(LIST_WAIT) })
+    said = await fetch(url, { headers, signal: AbortSignal.timeout(wait) })
   } catch {
     return null
   }

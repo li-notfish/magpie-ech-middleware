@@ -218,6 +218,23 @@ describe("the models of an account", () => {
     expect(await listedOf("chat", "https://api.example.com/v1", "sk-1", 1)).toBe(null)
   })
 
+  test("give up when the listing does not answer in time", async () => {
+    const address = "https://api.example.com/v1"
+    const server = http.createServer(() => {
+      // An upstream that accepts the request and never answers.
+    })
+    await new Promise((done) => server.listen(0, "127.0.0.1", done))
+    try {
+      const began = Date.now()
+      const said = await listedOf("chat", address, "sk-1", server.address().port, 100)
+      expect(said).toBe(null)
+      expect(Date.now() - began).toBeLessThan(2000)
+    } finally {
+      server.closeAllConnections?.()
+      server.close()
+    }
+  })
+
   test("name no levels for the kinds that think by a budget of their own", async () => {
     const address = "https://api.example.com/v1"
     const slug = slugOf(address)

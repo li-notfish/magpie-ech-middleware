@@ -1,6 +1,6 @@
 {
   "name": "magpie-ech-middleware",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Encrypted Client Hello for magpie: a provider signed in to with an upstream's address and key, whose traffic goes out with an encrypted client hello",
   "type": "module",
   "main": "./ech.plugin.js",

@@ -102,6 +102,10 @@ ECH 配置时，sidecar 会用内置的 Cloudflare 边缘 ECH 配置（掩护名
 `cloudflare-ech.com`）兜底。内置配置只给地址落在 Cloudflare 自己网段里的上游
 用：别的服务器会按掩护名应答，握手会失败。
 
+这次查询是有界的：所有解析器同时问，各自只给 5 秒，所以挡掉其中几个的网络不会
+在兜底之前就把模型列表的 20 秒预算用完。用内置配置发起的握手也有上限；边缘拒绝
+它、或者边缘给出的重试配置没有完成握手时，这条连接会改走普通 TLS。
+
 这份内置配置只是猜测，因为不是每个接入 Cloudflare 的站点都启用了 ECH。边缘
 拒绝它、又没有给出另一份配置时，sidecar 会对这条连接改用普通 TLS 重试，所以
 没启用 ECH 的上游仍然能用。只有这份内置猜测可能这样改走普通 TLS：DoH 查到、或者
@@ -115,6 +119,10 @@ ECH 配置时，sidecar 会用内置的 Cloudflare 边缘 ECH 配置（掩护名
 - `ECH_SIDECAR_ECH_FALLBACK=always` 对所有上游都用内置配置，即使看不出它的
   地址是 Cloudflare 的。
 - `upstreams.json` 里手写的 `ech` 仍然优先于以上所有。
+
+`cloudflare` 是唯一有名字的内置配置。Alidns 只是 DoH 列表里的解析器，不是
+内置的 ECH 配置：别的边缘自己的配置，可以写进 `upstreams.json` 给那个上游用；
+如果一份配置适合所有上游，也可以 base64 传给 `echFallback`。
 
 命令行 flag 优先于环境变量，两者都优先于内置默认值。插件选项里的
 `echFallback` 就是这个 flag：设了它，它会被当作 `-ech-fallback` 传给 sidecar，
@@ -162,6 +170,9 @@ sidecar 时，它的二进制会下载到 magpie 目录下本插件自己的文�
 | Linux x64 / arm64 | `ech-sidecar-linux-x64`、`ech-sidecar-linux-arm64` |
 | macOS x64 / arm64 | `ech-sidecar-darwin-x64`、`ech-sidecar-darwin-arm64` |
 
+改 `sidecar/` 下的代码必须同时提升包的 `version`：下载的二进制按包的版本分目录
+保留，同一版本已经下载过的机器会继续用之前那份。
+
 手动放进 `sidecar/bin/<平台>-<架构>/` 的二进制，或者 `ECH_SIDECAR_PATH` 指定的，
 优先于下载。发布里没有附件的平台有 Go 源码在旁边：机器上有 Go 1.26 或
 更新版本（第一个 `crypto/tls` 会说 Encrypted Client Hello 的版本）时，包会
@@ -175,7 +186,9 @@ npm run build
 
 - **模型列不出来** —— 地址不对、sidecar 没起来，或者上游没有模型列表的
   端点：模型就保持原样，magpie 的日志里会说一声。旧版本登录的账号没有
-  存下地址：重新登录一次。
+  存下地址：重新登录一次。插件给第一次列表 18 秒，留在 magpie 的 20 秒
+  预算内；sidecar 还在下载或查配置时，模型保持原样，下一次列表会用已经
+  起来的 sidecar。
 - **某个上游没有 ECH 配置** —— 它不发布 HTTPS 记录，或者记录里没有 `ech`：
   Cloudflare 后面的上游会用内置配置兜底；不是 Cloudflare 的可以在
   upstreams.json 里手写一份（见上），或者在所有上游都能用同一份配置时用

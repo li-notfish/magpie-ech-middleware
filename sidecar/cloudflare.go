@@ -42,7 +42,9 @@ var cloudflareNetworks = []netip.Prefix{
 // Cloudflare's own networks. It asks the system resolver, the one the
 // dial itself uses, so that it sees the address the connection will use.
 func cloudflareHost(host string) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// The lookup only tells whether the built-in fallback is for this
+	// host; the dial makes the connection of its own.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
 	if err != nil {

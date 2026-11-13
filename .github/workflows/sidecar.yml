@@ -18,10 +18,16 @@ on:
     paths:
       - "sidecar/**"
       - "scripts/**"
-      - "ech.middleware.js"
-      - "ech.middleware.test.mjs"
-      - "sidecar.mjs"
-      - "sidecar.test.mjs"
+      - "*.js"
+      - "*.mjs"
+      - "package.json"
+      - ".github/workflows/sidecar.yml"
+  workflow_dispatch:
+
+# two pushes must not write the same release's assets at once
+concurrency:
+  group: sidecar-release
+  cancel-in-progress: false
 
 permissions:
   # the assets of the sidecar release are written, the repository is not
@@ -53,10 +59,15 @@ jobs:
       - name: test
         run: bun test
 
+      - name: say what was built
+        run: sha256sum dist/*/ech-sidecar-* | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: publish the binaries as the release's assets
-        if: github.event_name == 'push'
+        if: github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: sidecar
+          body: |
+            Built from `${{ github.sha }}` by [run ${{ github.run_id }}](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}).
           files: dist/**/ech-sidecar-*
           fail_on_unmatched_files: true

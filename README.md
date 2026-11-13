@@ -121,6 +121,13 @@ name `cloudflare-ech.com`). The built-in one is only used for an upstream
 whose address is in Cloudflare's own networks: another server would answer
 under the cover name, and the handshake would fail.
 
+The lookup is bounded: every resolver is asked at once and given five
+seconds, so a network that blocks some of them does not spend the model
+list's whole 20-second budget before the fallback is tried. A handshake
+made with the built-in config is bounded too; when that config is rejected
+or the retry the edge offers does not complete, the connection goes on with
+plain TLS.
+
 The built-in config is a guess, because not every zone behind Cloudflare has
 ECH enabled. When the edge rejects it without offering another config, the
 sidecar retries that connection with plain TLS, so an upstream that does not
@@ -137,6 +144,11 @@ If you would rather fail than connect without ECH, turn the fallback off.
 - `ECH_SIDECAR_ECH_FALLBACK=always` uses the built-in one for every
   upstream, even when its address cannot be seen to be Cloudflare's.
 - An `ech` value in `upstreams.json` still wins over all of them.
+
+`cloudflare` is the only named built-in config. Alidns is in the DoH list as
+a resolver, not as an ECH config: a config of another edge's own can be put
+in `upstreams.json` for that upstream, or passed as base64 through
+`echFallback` when one config fits every upstream.
 
 The flag wins over the environment variable; both win over the built-in
 default. The plugin's `echFallback` option is that flag: what it names is
@@ -191,6 +203,10 @@ its own version instead of running the one left by the version before:
 | Linux x64 / arm64 | `ech-sidecar-linux-x64`, `ech-sidecar-linux-arm64` |
 | macOS x64 / arm64 | `ech-sidecar-darwin-x64`, `ech-sidecar-darwin-arm64` |
 
+A change under `sidecar/` must bump the package's `version`: the downloaded
+binary is kept under a folder named for it, so a machine that already has
+the same version keeps the binary it downloaded before.
+
 A binary put by hand in `sidecar/bin/<platform>-<arch>/`, or named by
 `ECH_SIDECAR_PATH`, is used before any download. A platform the release
 covers no asset of has the Go source beside it: when the machine has Go
@@ -206,7 +222,10 @@ npm run build
 - **The models do not list** — the address is not right, the sidecar is
   not up, or the upstream has no endpoint that lists models: the models
   stay as they were, and magpie's log says so. A sign-in of an earlier
-  version names no address: sign in again.
+  version names no address: sign in again. The plugin gives the first
+  listing 18 seconds, inside magpie's 20-second budget; when the sidecar is
+  still downloading or resolving its config, the models stay as they were
+  and the next listing uses the sidecar that is up by then.
 - **An upstream publishes no ECH configuration** — no HTTPS record, or
   none with `ech` in it: an upstream behind Cloudflare gets the built-in
   fallback; any other one can be given a configuration by hand in

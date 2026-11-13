@@ -11,7 +11,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"time"
 )
 
 // httpsRecord is the RR type of the HTTPS record (RFC 9460).
@@ -110,7 +109,9 @@ func echFromDoH(ctx context.Context, endpoint, host string) ([]byte, error) {
 	}
 	request.Header.Set("accept", "application/dns-json")
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	// A resolver has the same short budget as the lookup: one that has
+	// not answered by then is not going to make the first listing in time.
+	client := &http.Client{Timeout: dohWait}
 	response, err := client.Do(request)
 	if err != nil {
 		return nil, err

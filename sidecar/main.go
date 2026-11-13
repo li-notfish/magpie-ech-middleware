@@ -67,6 +67,17 @@ const (
 	// handshakeTimeout bounds the TLS handshake, the ECH part included.
 	handshakeTimeout = 20 * time.Second
 
+	// dohWait bounds one resolver's answer. Every endpoint is asked at
+	// once, and the first config list wins; a resolver that has not
+	// answered by then must not hold the first model list up.
+	dohWait = 5 * time.Second
+
+	// fallbackHandshakeTimeout bounds a handshake made with the built-in
+	// Cloudflare fallback. That list is only a guess, and an edge that
+	// offers another one may still not complete here: neither attempt may
+	// spend the whole request's time.
+	fallbackHandshakeTimeout = 4 * time.Second
+
 	// healthPath answers the plugin's own check without touching the
 	// upstream.
 	healthPath = "/_ech/health"
@@ -97,7 +108,9 @@ const defaultDoH = "https://dns.alidns.com/resolve,https://223.5.5.5/resolve,htt
 // would fail. "always" offers it to every host. -ech-fallback and
 // ECH_SIDECAR_ECH_FALLBACK change it; "" or "off" turns it off, and an
 // ECH config given by hand for an upstream always wins over all of them.
-const fallbackECH = "AEX+DQBBoAAgACBkYD3vFcUah0DMGsE/cvXCUeo0hsQAytdE0LTpQRwGGAAEAAEAAQASY2xvdWRmbGFyZS1lY2guY29tAAA="
+// It is the config cloudflare-ech.com published when this was written; the
+// edge may offer a newer one in a rejection, and that is retried.
+const fallbackECH = "AEX+DQBB0gAgACDFD85iIN6Pl/peBoQUS6kYYD6wzOeSYr/0XJMStAQwcgAEAAEAAQASY2xvdWRmbGFyZS1lY2guY29tAAA="
 
 // fallbackEnv is the environment variable that overrides -ech-fallback.
 const fallbackEnv = "ECH_SIDECAR_ECH_FALLBACK"
@@ -590,22 +603,31 @@ func (f echFallback) source() string {
 // dial connects to the upstream with Encrypted Client Hello. A server that
 // refuses the config list we sent offers another one; the handshake is made
 // again with it. The built-in fallback is only a guess, though: when the edge
-// rejects it without offering another one, the connection is made with plain
-// TLS. A config from DoH or from the user is authoritative, and is not
-// silently downgraded.
+// rejects it, offers a config that does not complete, or does not answer at
+// all, the connection is made with plain TLS. A config from DoH or from the
+// user is authoritative, and is not silently downgraded.
 func (u *upstream) dial(ctx context.Context, network, addr string) (net.Conn, error) {
 	list, fallback, plain := u.echList(ctx)
 	if len(list) == 0 && !plain {
 		return nil, fmt.Errorf("no ECH config for %s: the lookup did not finish in time", u.url.Hostname())
+	}
+	timeout := handshakeTimeout
+	attempts := 3
+	if fallback {
+		timeout = fallbackHandshakeTimeout
+		// The built-in list and the one retry the edge may offer are
+		// enough: a guess that has not connected by then is not going
+		// to make the first listing in time.
+		attempts = 2
 	}
 	var err error
 	var retry []byte
 	// Each edge of a network may know a different config list, so a
 	// rejection is answered with the list that edge offers and the
 	// handshake is made again with it.
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt < attempts; attempt++ {
 		var conn net.Conn
-		conn, err = u.handshake(ctx, network, addr, list)
+		conn, err = u.handshake(ctx, network, addr, list, timeout)
 		if err == nil {
 			// A config the edge offered and then accepted is the
 			// authoritative one for the connections that follow.
@@ -616,6 +638,12 @@ func (u *upstream) dial(ctx context.Context, network, addr string) (net.Conn, er
 		}
 		var rejected *tls.ECHRejectionError
 		if !errors.As(err, &rejected) {
+			// A built-in list that timed out or could not be
+			// connected with is no more final than a rejection:
+			// plain TLS may still serve the upstream.
+			if fallback {
+				break
+			}
 			return nil, err
 		}
 		if len(rejected.RetryConfigList) == 0 {
@@ -631,24 +659,24 @@ func (u *upstream) dial(ctx context.Context, network, addr string) (net.Conn, er
 		list = rejected.RetryConfigList
 		log.Printf("the server rejected our ECH config; retrying with the one it offered, under the cover name %q", coverName(list))
 	}
-	if fallback {
-		u.setPlain()
-		log.Printf("the server rejected the built-in ECH config of %s; retrying with plain TLS", u.url.Hostname())
-		conn, plainErr := u.handshake(ctx, network, addr, nil)
-		if plainErr != nil {
-			return nil, fmt.Errorf("the server rejected ECH, and plain TLS failed: %w", plainErr)
-		}
-		return conn, nil
+	if !fallback {
+		return nil, err
 	}
-	return nil, err
+	u.setPlain()
+	log.Printf("the built-in ECH config of %s was rejected or did not complete; retrying with plain TLS", u.url.Hostname())
+	conn, plainErr := u.handshake(ctx, network, addr, nil, handshakeTimeout)
+	if plainErr != nil {
+		return nil, fmt.Errorf("the built-in ECH config did not connect, and plain TLS failed: %w", plainErr)
+	}
+	return conn, nil
 }
 
 // handshake makes the TLS connection to the upstream. The name in the
 // config is the real one: with a config list, Go puts the cover name in
 // the outer hello and this one inside the encrypted part, and checks the
 // certificate against this one.
-func (u *upstream) handshake(ctx context.Context, network, addr string, list []byte) (net.Conn, error) {
-	ctx, cancel := context.WithTimeout(ctx, handshakeTimeout)
+func (u *upstream) handshake(ctx context.Context, network, addr string, list []byte, timeout time.Duration) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	raw, err := (&net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}).DialContext(ctx, network, addr)

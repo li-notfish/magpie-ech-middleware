@@ -25,6 +25,27 @@ import { echFallbackOf, portOf } from "./ech.shared.js"
 // upstream each account is signed in to, so none are declared here.
 const PROVIDER = "ech"
 
+// MODELS_WAIT is what magpie gives a provider's model list. The plugin
+// answers within it even when the sidecar's binary is still being downloaded
+// or the first ECH lookup is slow: the listing keeps the models it had
+// instead of the host reporting that the plugin finished late.
+const MODELS_WAIT = 18000
+
+// START_WAIT is how much of that budget bringing the sidecar up may take. A
+// download that takes longer goes on in the background; the next listing
+// finds it done.
+const START_WAIT = 6000
+
+// within answers the value when the promise has not settled in time. The
+// promise goes on, so a sidecar that is still starting is kept.
+function within(promise, ms, value) {
+  let timer
+  const late = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(value), ms)
+  })
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer))
+}
+
 export const ech = async (input, options) => {
   const directory = typeof input?.directory === "string" ? input.directory : ""
   const port = portOf(options)
@@ -103,13 +124,25 @@ export const ech = async (input, options) => {
         // The listing is what brings the sidecar up, and a loader runs
         // for a request, not for a listing: the upstream is written down
         // here, the way the loader writes it for its requests.
+        const began = Date.now()
         setUpstream(directory, slugOf(address), address)
-        const up = await ensureSidecar({ directory, port, echFallback: fallback })
+        const up = await within(ensureSidecar({ directory, port, echFallback: fallback }), START_WAIT, false)
         if (!up) {
-          console.error("[ech] the sidecar is not up, so the models stay as they were")
+          console.error("[ech] the sidecar is not up yet, so the models stay as they were")
           return known
         }
-        const said = await listedOf(kindOf(auth.metadata), address, typeof auth.key === "string" ? auth.key : "", port)
+        const left = MODELS_WAIT - (Date.now() - began)
+        if (left < 1000) {
+          console.error("[ech] the sidecar took too long to come up, so the models stay as they were")
+          return known
+        }
+        const said = await listedOf(
+          kindOf(auth.metadata),
+          address,
+          typeof auth.key === "string" ? auth.key : "",
+          port,
+          left,
+        )
         if (!said) {
           console.error(`[ech] the models of ${address} could not be listed; the ones known stay`)
           return known
