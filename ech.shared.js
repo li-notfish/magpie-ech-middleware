@@ -21,3 +21,11 @@ export function echFallbackOf(options) {
   const fallback = options && typeof options.echFallback === "string" ? options.echFallback.trim() : ""
   return fallback
 }
+
+// dohOf is the DoH endpoints the user set, as sidecarArgs hands them to
+// -doh: comma separated. Nothing set leaves the sidecar's own default and
+// lets it ask the built-in resolvers.
+export function dohOf(options) {
+  const doh = options && typeof options.doh === "string" ? options.doh.trim() : ""
+  return doh
+}

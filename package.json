@@ -1,6 +1,6 @@
 {
   "name": "magpie-ech-middleware",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Encrypted Client Hello for magpie: a provider signed in to with an upstream's address and key, whose traffic goes out with an encrypted client hello",
   "type": "module",
   "main": "./ech.plugin.js",
@@ -13,6 +13,7 @@
     "sidecar/main.go",
     "sidecar/cloudflare.go",
     "sidecar/ech.go",
+    "sidecar/dohwire.go",
     "sidecar/go.mod",
     "scripts/build.mjs",
     "scripts/build-all.mjs",
@@ -43,6 +44,7 @@
     "hooks": "./ech.hooks.js",
     "options": {
       "port": 8790,
+      "doh": "",
       "echFallback": ""
     }
   }

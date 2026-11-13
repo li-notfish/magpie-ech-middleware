@@ -205,6 +205,17 @@ describe("sidecarArgs", () => {
     ])
   })
 
+  test("carry the DoH endpoints the options name", () => {
+    expect(sidecarArgs("C:/magpie/upstreams.json", "127.0.0.1:8790", "", "https://doh.pub/dns-query")).toEqual([
+      "-upstreams-file",
+      "C:/magpie/upstreams.json",
+      "-listen",
+      "127.0.0.1:8790",
+      "-doh",
+      "https://doh.pub/dns-query",
+    ])
+  })
+
   test("leave the fallback to the sidecar when the options name none", () => {
     expect(sidecarArgs("C:/magpie/upstreams.json", "127.0.0.1:8790", "")).toEqual([
       "-upstreams-file",

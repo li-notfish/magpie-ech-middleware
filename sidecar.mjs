@@ -25,7 +25,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSy
 import http from "node:http"
 import { delimiter, dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { echFallbackOf, portOf } from "./ech.shared.js"
+import { dohOf, echFallbackOf, portOf } from "./ech.shared.js"
 
 // Where the package sits, and where the sidecar is looked for.
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -267,13 +267,16 @@ export function buildSidecar(spawnImpl = spawn, go = findGo()) {
 
 // sidecarArgs are the flags the sidecar is started with: the file it
 // reads its upstreams from, the address it listens on, what the user
-// says about going on without an ECH config, and the ECH fallback when
-// the options name one. Without one, the sidecar's own -ech-fallback
-// and ECH_SIDECAR_ECH_FALLBACK decide.
-export function sidecarArgs(file, listen = "", fallback = "") {
+// says about going on without an ECH config, the ECH fallback when the
+// options name one, and the DoH endpoints when they name those. Without
+// a fallback, the sidecar's own -ech-fallback and
+// ECH_SIDECAR_ECH_FALLBACK decide; without DoH endpoints, its own
+// default resolvers do.
+export function sidecarArgs(file, listen = "", fallback = "", doh = "") {
   if (!file) throw new Error(NO_UPSTREAMS)
   const args = ["-upstreams-file", file]
   if (listen) args.push("-listen", listen)
+  if (doh) args.push("-doh", doh)
   if (fallback) args.push("-ech-fallback", fallback)
   if (process.env.ECH_SIDECAR_ALLOW_PLAIN === "1") args.push("-allow-plain")
   return args
@@ -281,7 +284,7 @@ export function sidecarArgs(file, listen = "", fallback = "") {
 
 // startSidecar runs the sidecar and waits for the port it took. The
 // sidecar writes one JSON line to its stdout when it is ready.
-export function startSidecar(spawnImpl = spawn, path = "", file = "", listen = "", fallback = "") {
+export function startSidecar(spawnImpl = spawn, path = "", file = "", listen = "", fallback = "", doh = "") {
   if (!file) return Promise.reject(new Error(NO_UPSTREAMS))
   const binary = findSidecar(path)
   return new Promise((resolve, reject) => {
@@ -296,7 +299,7 @@ export function startSidecar(spawnImpl = spawn, path = "", file = "", listen = "
     }
     let proc
     try {
-      proc = spawnImpl(binary, sidecarArgs(file, listen, fallback), { stdio: ["ignore", "pipe", "pipe"], windowsHide: true })
+      proc = spawnImpl(binary, sidecarArgs(file, listen, fallback, doh), { stdio: ["ignore", "pipe", "pipe"], windowsHide: true })
     } catch (error) {
       reject(new Error(`the sidecar could not be started: ${error?.message ?? error}`))
       return
@@ -448,6 +451,7 @@ export async function start(options = {}) {
   const port = portOf(o)
   const listen = `127.0.0.1:${port}`
   const fallback = echFallbackOf(o)
+  const doh = dohOf(o)
 
   // The check is given the time the caller has: the gateway hook that
   // starts the sidecar has a second of its own, and the check must not
@@ -469,7 +473,7 @@ export async function start(options = {}) {
     const got = await downloadSidecar(configDirectory)
     if (got) binary = got
   }
-  const { child } = await startSidecar(spawn, binary, file, listen, fallback)
+  const { child } = await startSidecar(spawn, binary, file, listen, fallback, doh)
   running.add(child)
   child?.once?.("exit", () => {
     running.delete(child)

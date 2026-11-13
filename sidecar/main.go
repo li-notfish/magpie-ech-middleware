@@ -10,6 +10,7 @@
 // Usage:
 //
 //	ech-sidecar -upstreams-file upstreams.json [-listen 127.0.0.1:8790]
+//	           [-doh <endpoint,...>]
 //	           [-ech-fallback cloudflare|always|off|<base64 ECHConfigList>]
 //
 // -ech-fallback defaults to cloudflare: the built-in ECH config of
@@ -91,11 +92,10 @@ const (
 )
 
 // defaultDoH are the endpoints asked for the upstream's HTTPS record, all
-// at once, first answer with a config list winning. Alidns and its plain-IP
-// form answer from inside the network the plugin runs on, which is the
-// network where the blocking happens; the others may not be reached at all
-// from it.
-const defaultDoH = "https://dns.alidns.com/resolve,https://223.5.5.5/resolve,https://dns.google/resolve,https://cloudflare-dns.com/dns-query"
+// at once, first answer with a config list winning. Alidns and DNSPod
+// answer from inside the network the plugin runs on, which is the network
+// where the blocking happens; the others may not be reached at all from it.
+const defaultDoH = "https://dns.alidns.com/resolve,https://223.5.5.5/resolve,https://doh.pub/dns-query,https://dns.google/resolve,https://cloudflare-dns.com/dns-query"
 
 // fallbackECH is the ECH config list of Cloudflare's edge, kept for the
 // upstreams behind it (a Cloudflare-proxied site, which is most of them)
@@ -147,7 +147,7 @@ type sidecar struct {
 	mu          sync.RWMutex
 	ups         map[string]*upstream
 	allowPlain  bool
-	doh         string
+	doh         []string
 	echFallback echFallback
 }
 
@@ -163,7 +163,7 @@ type echFallback struct {
 func main() {
 	listen := flag.String("listen", "127.0.0.1:8790", "address to listen on")
 	upstreams := flag.String("upstreams-file", "", "file the upstreams are read from")
-	doh := flag.String("doh", defaultDoH, "comma separated DoH endpoints asked for the HTTPS record")
+	doh := flag.String("doh", defaultDoH, "comma separated DoH endpoints asked for the HTTPS record; JSON and RFC 8484 are supported")
 	fallbackFlag := flag.String("ech-fallback", "cloudflare", "ECH config list used when DoH gives none: cloudflare (built-in, Cloudflare hosts only), a base64 ECHConfigList (every host), or \"\" to turn it off")
 	portFile := flag.String("port-file", "", "file the listening port is written to")
 	allowPlain := flag.Bool("allow-plain", false, "go on without ECH when no config list is found")
@@ -177,14 +177,19 @@ func main() {
 	if err != nil {
 		fail("%v", err)
 	}
+	endpoints, err := dohEndpoints(*doh)
+	if err != nil {
+		fail("%v", err)
+	}
 
 	sc := &sidecar{
 		ups:         map[string]*upstream{},
 		allowPlain:  *allowPlain,
-		doh:         *doh,
+		doh:         endpoints,
 		echFallback: fallback,
 	}
 	log.Printf("the ECH fallback is %s", fallback.describe())
+	log.Printf("the DoH endpoints are %s", strings.Join(endpoints, ", "))
 	if err := sc.read(*upstreams); err != nil {
 		fail("the upstreams cannot be read: %v", err)
 	}
@@ -455,7 +460,7 @@ func (u *upstream) direct(req *http.Request) {
 // network whose resolvers strip the HTTPS record, that is the only way to
 // connect with ECH at all. It gives up when the sidecar is told to go on
 // without one.
-func (u *upstream) resolve(doh string, fallback echFallback) {
+func (u *upstream) resolve(doh []string, fallback echFallback) {
 	host := u.url.Hostname()
 	declined := false
 	for {

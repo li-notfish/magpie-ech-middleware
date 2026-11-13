@@ -67,10 +67,45 @@ All of them are the plugin's own, in `plugins.json`:
 | Option | Default | What it does |
 | --- | --- | --- |
 | `port` | `8790` | which port the sidecar listens on |
+| `doh` | `""` | the DoH endpoints asked for the upstream's HTTPS record, comma separated; empty uses the built-in list |
 | `echFallback` | `""` | the ECH config offered when DoH gives none: `cloudflare`, `always`, `off`, or a base64 `ECHConfigList` |
 
 The options are read when the plugin is loaded: when plugins.json changes,
 magpie loads the plugin again.
+
+## DoH resolvers
+
+The sidecar first reads the `ech` configuration from the upstream's HTTPS
+record. It asks all of these DoH endpoints by default:
+
+```text
+https://dns.alidns.com/resolve
+https://223.5.5.5/resolve
+https://doh.pub/dns-query
+https://dns.google/resolve
+https://cloudflare-dns.com/dns-query
+```
+
+To use your own resolvers, set the `doh` option, with the addresses
+separated by commas:
+
+```sh
+magpie plugin options magpie-ech-middleware '{"doh":"https://doh.pub/dns-query,https://dns.alidns.com/dns-query"}'
+```
+
+The value **replaces** the built-in list instead of adding to it. Both the
+JSON form of DoH (such as `https://dns.alidns.com/resolve`) and the RFC 8484
+wire form (such as `https://doh.pub/dns-query`) are supported. The address
+has to be the endpoint that actually answers the query.
+
+`doh` only decides where the ECH configuration is looked up; it does not
+provide one. Alidns and DNSPod are DNS hosts: they do not publish a general
+ECH configuration for a domain. The configuration is published per domain
+by the CDN or edge that serves the traffic, and the sidecar uses what it
+finds.
+
+The DoH endpoints are read when the sidecar starts; restart magpie after
+changing the option.
 
 ## What a request goes through
 
@@ -145,9 +180,12 @@ If you would rather fail than connect without ECH, turn the fallback off.
   upstream, even when its address cannot be seen to be Cloudflare's.
 - An `ech` value in `upstreams.json` still wins over all of them.
 
-`cloudflare` is the only named built-in config. Alidns is in the DoH list as
-a resolver, not as an ECH config: a config of another edge's own can be put
-in `upstreams.json` for that upstream, or passed as base64 through
+`cloudflare` is the only named built-in config. DoH resolvers and the ECH
+fallback are two different things: `doh` decides where a configuration is
+looked up, and `echFallback` decides what is used when none is found. The
+Alidns and DNSPod DoH endpoints can be named in `doh`, but they are not
+built-in ECH configurations. A config of another edge's own can be put in
+`upstreams.json` for that upstream, or passed as base64 through
 `echFallback` when one config fits every upstream.
 
 The flag wins over the environment variable; both win over the built-in
@@ -163,6 +201,7 @@ The sidecar is a program of its own, and can be run by hand:
 
 ```sh
 ech-sidecar.exe -upstreams-file upstreams.json -listen 127.0.0.1:8790 \
+  [-doh "https://doh.pub/dns-query,https://dns.alidns.com/dns-query"] \
   [-ech-fallback cloudflare]
 # the one the plugin downloaded, the one in sidecar/bin/, or one on the PATH
 ```
@@ -231,6 +270,11 @@ npm run build
   fallback; any other one can be given a configuration by hand in
   upstreams.json (see above), or with the `echFallback` option when one
   configuration fits every upstream.
+- **DoH finds nothing** — the current network may block the built-in
+  resolvers, or the record may have no `ech` in it: name a DoH endpoint that
+  works on this network in the `doh` option, and restart magpie. DNSPod's
+  `https://doh.pub/dns-query` and Alidns' `https://dns.alidns.com/dns-query`
+  can both be given directly.
 - **In a hurry, and this one connection may go in the clear** — set
   `ECH_SIDECAR_ALLOW_PLAIN=1` and restart magpie: an upstream no ECH
   configuration is found for goes out without one.

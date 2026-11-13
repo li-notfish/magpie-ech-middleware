@@ -56,9 +56,38 @@ agent 问 `ech/<模型>`，模型就是上游列出的那些。请求从 sidecar
 | 选项 | 默认 | 做什么 |
 | --- | --- | --- |
 | `port` | `8790` | sidecar 监听哪个端口 |
+| `doh` | `""` | 查上游 HTTPS 记录用的 DoH 端点，逗号分隔；留空用内置列表 |
 | `echFallback` | `""` | DoH 查不到 ECH 配置时 sidecar 用的配置：`cloudflare`、`always`、`off`，或一段 base64 的 `ECHConfigList` |
 
 选项是插件加载的时候读的，plugins.json 变了 magpie 会重新加载插件。
+
+## DoH 解析器
+
+sidecar 先从上游域名的 HTTPS 记录里读 `ech` 配置。默认会同时问这些 DoH 端点：
+
+```text
+https://dns.alidns.com/resolve
+https://223.5.5.5/resolve
+https://doh.pub/dns-query
+https://dns.google/resolve
+https://cloudflare-dns.com/dns-query
+```
+
+要换成自己的解析器，用 `doh` 选项，多个地址用逗号分隔：
+
+```sh
+magpie plugin options magpie-ech-middleware '{"doh":"https://doh.pub/dns-query,https://dns.alidns.com/dns-query"}'
+```
+
+设置后会**替换**内置列表，不是追加。JSON 形式的 DoH（如
+`https://dns.alidns.com/resolve`）和 RFC 8484 wire 形式（如
+`https://doh.pub/dns-query`）都支持。地址要填到实际的查询端点。
+
+`doh` 只决定“去哪里查 ECH 配置”，它本身不提供 ECH 配置。阿里云、DNSPod
+作为 DNS 托管商不会给域名一份通用 ECH；ECH 配置由实际承载流量的 CDN/边缘
+按域名发布，sidecar 查到什么就用什么。
+
+DoH 端点在 sidecar 启动时读取；改完选项后重启 Magpie。
 
 ## 一个请求会经过什么
 
@@ -120,9 +149,11 @@ ECH 配置时，sidecar 会用内置的 Cloudflare 边缘 ECH 配置（掩护名
   地址是 Cloudflare 的。
 - `upstreams.json` 里手写的 `ech` 仍然优先于以上所有。
 
-`cloudflare` 是唯一有名字的内置配置。Alidns 只是 DoH 列表里的解析器，不是
-内置的 ECH 配置：别的边缘自己的配置，可以写进 `upstreams.json` 给那个上游用；
-如果一份配置适合所有上游，也可以 base64 传给 `echFallback`。
+`cloudflare` 是唯一有名字的内置配置。DoH 解析器和 ECH 兜底是两件事：`doh`
+只决定去哪里查配置，`echFallback` 决定查不到时用哪份配置。阿里云、DNSPod
+的 DoH 端点可以通过 `doh` 填写，但它们不是内置 ECH 配置。别的边缘自己的
+配置，可以写进 `upstreams.json` 给那个上游用；如果一份配置适合所有上游，
+也可以 base64 传给 `echFallback`。
 
 命令行 flag 优先于环境变量，两者都优先于内置默认值。插件选项里的
 `echFallback` 就是这个 flag：设了它，它会被当作 `-ech-fallback` 传给 sidecar，
@@ -135,6 +166,7 @@ sidecar 本身是个程序，可以手动跑：
 
 ```sh
 ech-sidecar.exe -upstreams-file upstreams.json -listen 127.0.0.1:8790 \
+  [-doh "https://doh.pub/dns-query,https://dns.alidns.com/dns-query"] \
   [-ech-fallback cloudflare]
 # 插件下载的那个、sidecar/bin/ 里的，或 PATH 上的
 ```
@@ -193,6 +225,10 @@ npm run build
   Cloudflare 后面的上游会用内置配置兜底；不是 Cloudflare 的可以在
   upstreams.json 里手写一份（见上），或者在所有上游都能用同一份配置时用
   `echFallback` 选项。
+- **DoH 查不到** —— 当前网络可能挡了内置解析器，或者记录确实没有 `ech`：
+  在 `doh` 选项里填一个当前网络可用的 DoH 端点，再重启 Magpie。DNSPod 的
+  `https://doh.pub/dns-query` 和阿里云的 `https://dns.alidns.com/dns-query`
+  都可以直接填。
 - **急着用、不在乎这一条明文** —— 设 `ECH_SIDECAR_ALLOW_PLAIN=1` 再重启
   magpie：查不到 ECH 配置的上游会明文连出去。
 - **sidecar 起不来** —— 二进制下载不到（这个平台没有发布附件，或者没网）时，

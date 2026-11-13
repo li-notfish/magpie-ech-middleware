@@ -7,7 +7,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ech } from "./ech.plugin.js"
 import { addressOf, kindOf, listedOf, slugOf, validateAddress } from "./ech.providers.js"
-import { echFallbackOf, portOf } from "./ech.shared.js"
+import { dohOf, echFallbackOf, portOf } from "./ech.shared.js"
 import { upstreamFile } from "./sidecar.mjs"
 
 const temps = []
@@ -320,5 +320,15 @@ describe("the helpers", () => {
     expect(echFallbackOf({ echFallback: "  " })).toBe("")
     expect(echFallbackOf(null)).toBe("")
     expect(echFallbackOf({ echFallback: 8790 })).toBe("")
+  })
+
+  test("the DoH endpoints are the ones the user set", () => {
+    expect(dohOf({ doh: " https://doh.pub/dns-query,https://dns.alidns.com/dns-query " })).toBe(
+      "https://doh.pub/dns-query,https://dns.alidns.com/dns-query",
+    )
+    expect(dohOf({})).toBe("")
+    expect(dohOf({ doh: "  " })).toBe("")
+    expect(dohOf(null)).toBe("")
+    expect(dohOf({ doh: ["https://doh.pub/dns-query"] })).toBe("")
   })
 })
