@@ -15,7 +15,8 @@ Encrypted Client Hello 建连再转发给厂商。
   Anthropic Messages、Gemini）、上游的 Key。它列出的模型就是上游自己的模型，
   从 sidecar 那边问来的，每个模型带低/中/高/特高/最高五档思考等级可选。
 - **sidecar**（`sidecar/`）是一个小的 Go 程序：通过 DoH 解析每个上游的 ECH
-  配置，用 Encrypted Client Hello 建连，再把请求转发过去。
+  配置，用 Encrypted Client Hello 建连，再把请求转发过去。解析不到配置时，
+  对 Cloudflare 后面的上游用内置的 Cloudflare 配置兜底。
 - **hooks**（`ech.hooks.js`）跑在 Bun 里（magpie 的插件宿主），那里可以起
   进程：由它把 sidecar 拉起来并维持。
 
@@ -93,12 +94,30 @@ agent 问 `ech/<模型>`，模型就是上游列出的那些。请求从 sidecar
 }
 ```
 
+## ECH 兜底
+
+有些网络会挡 DoH，或者把 HTTPS 记录里的 `ech` 参数剥掉。所有解析器都答不出
+ECH 配置时，sidecar 会用内置的 Cloudflare 边缘 ECH 配置（掩护名
+`cloudflare-ech.com`）兜底。内置配置只给地址落在 Cloudflare 自己网段里的上游
+用：别的服务器会按掩护名应答，握手会失败。
+
+- `ECH_SIDECAR_ECH_FALLBACK=off`（或 `-ech-fallback ""`）关掉兜底。
+- `ECH_SIDECAR_ECH_FALLBACK=<base64 ECHConfigList>`（或
+  `-ech-fallback <base64>`）换成自己的配置，对所有上游生效。
+- `ECH_SIDECAR_ECH_FALLBACK=cloudflare`（默认）保留内置配置。
+- `ECH_SIDECAR_ECH_FALLBACK=always` 对所有上游都用内置配置，即使看不出它的
+  地址是 Cloudflare 的。
+- `upstreams.json` 里手写的 `ech` 仍然优先于以上所有。
+
+命令行 flag 优先于环境变量，两者都优先于内置默认值。
+
 ## 单独跑 sidecar
 
 sidecar 本身是个程序，可以手动跑：
 
 ```sh
-ech-sidecar.exe -upstreams-file upstreams.json -listen 127.0.0.1:8790
+ech-sidecar.exe -upstreams-file upstreams.json -listen 127.0.0.1:8790 \
+  [-ech-fallback cloudflare]
 # 插件下载的那个、sidecar/bin/ 里的，或 PATH 上的
 ```
 
@@ -148,7 +167,8 @@ npm run build
   端点：模型就保持原样，magpie 的日志里会说一声。旧版本登录的账号没有
   存下地址：重新登录一次。
 - **某个上游没有 ECH 配置** —— 它不发布 HTTPS 记录，或者记录里没有 `ech`：
-  可以在 upstreams.json 里手写一份（见上）。
+  Cloudflare 后面的上游会用内置配置兜底；不是 Cloudflare 的可以在
+  upstreams.json 里手写一份（见上）。
 - **急着用、不在乎这一条明文** —— 设 `ECH_SIDECAR_ALLOW_PLAIN=1` 再重启
   magpie：查不到 ECH 配置的上游会明文连出去。
 - **sidecar 起不来** —— 二进制下载不到（这个平台没有发布附件，或者没网）时，

@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -59,14 +60,39 @@ func echConfigList(ctx context.Context, host, given, doh string) ([]byte, error)
 		return nil, fmt.Errorf("no DoH endpoint given")
 	}
 
-	var last error
+	// The endpoints are asked at once, and the first answer with a config
+	// list wins: from a network that blocks some of them, waiting for each
+	// in turn can take longer than the whole lookup is given.
+	type answer struct {
+		list []byte
+		err  error
+	}
+	answers := make(chan answer, len(endpoints))
+	var wg sync.WaitGroup
 	for _, endpoint := range endpoints {
-		list, err := echFromDoH(ctx, endpoint, host)
-		if err == nil {
-			return list, nil
+		wg.Add(1)
+		go func(endpoint string) {
+			defer wg.Done()
+			list, err := echFromDoH(ctx, endpoint, host)
+			if err != nil {
+				log.Printf("%s could not give the ECH config of %s: %v", endpoint, host, err)
+			}
+			answers <- answer{list: list, err: err}
+		}(endpoint)
+	}
+	go func() {
+		wg.Wait()
+		close(answers)
+	}()
+	var last error
+	for a := range answers {
+		if a.err == nil {
+			return a.list, nil
 		}
-		last = err
-		log.Printf("%s could not give the ECH config of %s: %v", endpoint, host, err)
+		last = a.err
+	}
+	if last == nil {
+		last = fmt.Errorf("no resolver answered")
 	}
 	return nil, last
 }

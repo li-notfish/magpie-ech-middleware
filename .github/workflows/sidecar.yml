@@ -46,6 +46,10 @@ jobs:
       - name: build the sidecar for every platform
         run: node scripts/build-all.mjs
 
+      - name: test the sidecar
+        run: go test ./...
+        working-directory: sidecar
+
       - name: test
         run: bun test
 

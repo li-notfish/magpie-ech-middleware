@@ -22,7 +22,9 @@ and each carries the levels of thought (low, medium, high, xhigh, max) an
 agent may ask it at.
 - **The sidecar** (`sidecar/`) is a small Go program: it resolves each
   upstream's ECH configuration over DoH, connects with an Encrypted
-  Client Hello, and forwards the requests.
+  Client Hello, and forwards the requests. When the resolvers give no
+  configuration, it falls back to a built-in Cloudflare one for upstreams
+  behind Cloudflare.
 - **The hooks** (`ech.hooks.js`) run in Bun, in magpie's plugin host,
   where a process can be started: they bring the sidecar up and keep it
   there.
@@ -109,12 +111,35 @@ An upstream that publishes no ECH configuration can be given one by hand:
 }
 ```
 
+## ECH fallback
+
+Some networks block DoH or strip the `ech` parameter from the HTTPS
+record. When every resolver answers without an ECH configuration, the
+sidecar falls back to a built-in configuration of Cloudflare's edge (cover
+name `cloudflare-ech.com`). The built-in one is only used for an upstream
+whose address is in Cloudflare's own networks: another server would answer
+under the cover name, and the handshake would fail.
+
+- `ECH_SIDECAR_ECH_FALLBACK=off` (or `-ech-fallback ""`) turns it off.
+- `ECH_SIDECAR_ECH_FALLBACK=<base64 ECHConfigList>` (or
+  `-ech-fallback <base64>`) uses a configuration of your own for every
+  upstream.
+- `ECH_SIDECAR_ECH_FALLBACK=cloudflare` (the default) keeps the built-in
+  one.
+- `ECH_SIDECAR_ECH_FALLBACK=always` uses the built-in one for every
+  upstream, even when its address cannot be seen to be Cloudflare's.
+- An `ech` value in `upstreams.json` still wins over all of them.
+
+The flag wins over the environment variable; both win over the built-in
+default.
+
 ## Running the sidecar on its own
 
 The sidecar is a program of its own, and can be run by hand:
 
 ```sh
-ech-sidecar.exe -upstreams-file upstreams.json -listen 127.0.0.1:8790
+ech-sidecar.exe -upstreams-file upstreams.json -listen 127.0.0.1:8790 \
+  [-ech-fallback cloudflare]
 # the one the plugin downloaded, the one in sidecar/bin/, or one on the PATH
 ```
 
@@ -169,8 +194,9 @@ npm run build
   stay as they were, and magpie's log says so. A sign-in of an earlier
   version names no address: sign in again.
 - **An upstream publishes no ECH configuration** — no HTTPS record, or
-  none with `ech` in it: one can be given by hand in upstreams.json
-  (see above).
+  none with `ech` in it: an upstream behind Cloudflare gets the built-in
+  fallback; any other one can be given a configuration by hand in
+  upstreams.json (see above).
 - **In a hurry, and this one connection may go in the clear** — set
   `ECH_SIDECAR_ALLOW_PLAIN=1` and restart magpie: an upstream no ECH
   configuration is found for goes out without one.

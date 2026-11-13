@@ -10,6 +10,13 @@
 // Usage:
 //
 //	ech-sidecar -upstreams-file upstreams.json [-listen 127.0.0.1:8790]
+//	           [-ech-fallback cloudflare|always|off|<base64 ECHConfigList>]
+//
+// -ech-fallback defaults to cloudflare: the built-in ECH config of
+// Cloudflare's edge, offered only to upstreams whose address is in
+// Cloudflare's own networks. ECH_SIDECAR_ECH_FALLBACK overrides it when
+// the flag is not given; always offers it to every upstream; "" or off
+// turns the fallback off.
 //
 // The upstreams file is a JSON object: each name is an upstream the
 // plugin serves, and each address is where that upstream is reached.
@@ -32,6 +39,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -68,10 +76,28 @@ const (
 	upstreamWait = 2 * time.Second
 )
 
-// defaultDoH are the endpoints asked for the upstream's HTTPS record, in the
-// order they are tried. Alidns answers from inside the network the plugin
-// runs on, which is the network where the blocking happens.
-const defaultDoH = "https://dns.alidns.com/resolve,https://cloudflare-dns.com/dns-query,https://dns.google/resolve"
+// defaultDoH are the endpoints asked for the upstream's HTTPS record, all
+// at once, first answer with a config list winning. Alidns and its plain-IP
+// form answer from inside the network the plugin runs on, which is the
+// network where the blocking happens; the others may not be reached at all
+// from it.
+const defaultDoH = "https://dns.alidns.com/resolve,https://223.5.5.5/resolve,https://dns.google/resolve,https://cloudflare-dns.com/dns-query"
+
+// fallbackECH is the ECH config list of Cloudflare's edge, kept for the
+// upstreams behind it (a Cloudflare-proxied site, which is most of them)
+// when every DoH endpoint answers without one: from a network that blocks
+// the public resolvers, or one whose resolvers strip the record, the lookup
+// finds nothing, and without this the sidecar could never connect. The
+// cover name it carries is cloudflare-ech.com. The built-in fallback is
+// offered only to a host whose address is in Cloudflare's own networks:
+// another server would answer under the cover name, and the handshake
+// would fail. "always" offers it to every host. -ech-fallback and
+// ECH_SIDECAR_ECH_FALLBACK change it; "" or "off" turns it off, and an
+// ECH config given by hand for an upstream always wins over all of them.
+const fallbackECH = "AEX+DQBBoAAgACBkYD3vFcUah0DMGsE/cvXCUeo0hsQAytdE0LTpQRwGGAAEAAEAAQASY2xvdWRmbGFyZS1lY2guY29tAAA="
+
+// fallbackEnv is the environment variable that overrides -ech-fallback.
+const fallbackEnv = "ECH_SIDECAR_ECH_FALLBACK"
 
 // upstream is one address the sidecar serves: the name it is called by in
 // the path, the address it forwards to, and the ECH config it connects
@@ -97,16 +123,27 @@ type upstream struct {
 
 // sidecar is the upstreams it serves, by name.
 type sidecar struct {
-	mu         sync.RWMutex
-	ups        map[string]*upstream
-	allowPlain bool
-	doh        string
+	mu          sync.RWMutex
+	ups         map[string]*upstream
+	allowPlain  bool
+	doh         string
+	echFallback echFallback
+}
+
+// echFallback is the config list used when no resolver gives one. A list
+// the user gave is used for every upstream; the built-in Cloudflare list
+// is only for hosts behind Cloudflare.
+type echFallback struct {
+	list    []byte
+	builtin bool
+	always  bool
 }
 
 func main() {
 	listen := flag.String("listen", "127.0.0.1:8790", "address to listen on")
 	upstreams := flag.String("upstreams-file", "", "file the upstreams are read from")
 	doh := flag.String("doh", defaultDoH, "comma separated DoH endpoints asked for the HTTPS record")
+	fallbackFlag := flag.String("ech-fallback", "cloudflare", "ECH config list used when DoH gives none: cloudflare (built-in, Cloudflare hosts only), a base64 ECHConfigList (every host), or \"\" to turn it off")
 	portFile := flag.String("port-file", "", "file the listening port is written to")
 	allowPlain := flag.Bool("allow-plain", false, "go on without ECH when no config list is found")
 	flag.Parse()
@@ -115,11 +152,18 @@ func main() {
 		fail("no upstream file given: -upstreams-file <file> is required")
 	}
 
-	sc := &sidecar{
-		ups:        map[string]*upstream{},
-		allowPlain: *allowPlain,
-		doh:        *doh,
+	fallback, err := fallbackOf(*fallbackFlag, flagWasSet("ech-fallback"))
+	if err != nil {
+		fail("%v", err)
 	}
+
+	sc := &sidecar{
+		ups:         map[string]*upstream{},
+		allowPlain:  *allowPlain,
+		doh:         *doh,
+		echFallback: fallback,
+	}
+	log.Printf("the ECH fallback is %s", fallback.describe())
 	if err := sc.read(*upstreams); err != nil {
 		fail("the upstreams cannot be read: %v", err)
 	}
@@ -214,7 +258,7 @@ func (sc *sidecar) read(path string) error {
 		if had {
 			log.Printf("the upstream %q now points at %s", name, address)
 		}
-		go u.resolve(sc.doh)
+		go u.resolve(sc.doh, sc.echFallback)
 	}
 	sc.mu.Lock()
 	for name := range sc.ups {
@@ -377,32 +421,157 @@ func (u *upstream) direct(req *http.Request) {
 	req.URL.Host = u.url.Host
 	req.URL.Path = joinPath(u.url.Path, req.URL.Path)
 	if req.URL.RawPath != "" {
-	req.URL.RawPath = joinPath(u.url.Path, req.URL.RawPath)
+		req.URL.RawPath = joinPath(u.url.Path, req.URL.RawPath)
 	}
 	req.Host = u.url.Host
 }
 
 // resolve looks the upstream's ECH config up over DoH and keeps looking
 // until it finds one: the record may carry it only later, and a resolver
-// that refuses must not keep the sidecar from serving. It gives up when
-// the sidecar is told to go on without one.
-func (u *upstream) resolve(doh string) {
+// that refuses must not keep the sidecar from serving. When no resolver
+// gives one and a fallback config is set, the fallback is used: from a
+// network whose resolvers strip the HTTPS record, that is the only way to
+// connect with ECH at all. It gives up when the sidecar is told to go on
+// without one.
+func (u *upstream) resolve(doh string, fallback echFallback) {
+	host := u.url.Hostname()
+	declined := false
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		list, err := echConfigList(ctx, u.url.Hostname(), u.ech, doh)
+		list, err := echConfigList(ctx, host, u.ech, doh)
 		cancel()
 		if err == nil {
 			u.setList(list)
-			log.Printf("ECH for %s uses the cover name %q", u.url.Hostname(), u.coverName())
+			log.Printf("ECH for %s uses the cover name %q", host, u.coverName())
 			return
 		}
-		log.Printf("no ECH config for %s: %v", u.url.Hostname(), err)
+		log.Printf("no ECH config for %s: %v", host, err)
+		if u.ech == "" && fallback.forHost(host) {
+			u.setList(fallback.list)
+			log.Printf("ECH for %s uses %s, cover name %q", host, fallback.source(), u.coverName())
+			return
+		}
+		if u.ech == "" && fallback.builtin && len(fallback.list) > 0 && !declined {
+			log.Printf("the built-in ECH fallback is not used for %s: its address is not Cloudflare's", host)
+			declined = true
+		}
 		if u.allowPlain {
-			log.Printf("going on without ECH for %s", u.url.Hostname())
+			log.Printf("going on without ECH for %s", host)
 			return
 		}
 		time.Sleep(configWait)
 	}
+}
+
+// fallbackOf is the fallback the flag, the environment or the built-in
+// default names. The flag wins when it was given, then the environment,
+// then the built-in Cloudflare config.
+func fallbackOf(flagValue string, flagGiven bool) (echFallback, error) {
+	value := flagValue
+	source := "-ech-fallback"
+	if !flagGiven {
+		if env, ok := os.LookupEnv(fallbackEnv); ok {
+			value = env
+			source = fallbackEnv
+		}
+	}
+	fallback, err := parseFallback(value)
+	if err != nil {
+		return echFallback{}, fmt.Errorf("%s: %w", source, err)
+	}
+	return fallback, nil
+}
+
+// parseFallback reads what the flag or the environment says: off, the
+// built-in Cloudflare config, or a base64 config of the user's own.
+func parseFallback(value string) (echFallback, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "0", "false", "no", "off", "none", "disable", "disabled":
+		return echFallback{}, nil
+	case "1", "true", "yes", "on", "cloudflare", "builtin", "built-in", "default", "auto":
+		list, err := decodeECHList(fallbackECH)
+		if err != nil {
+			return echFallback{}, fmt.Errorf("the built-in ECH config is not base64: %w", err)
+		}
+		return echFallback{list: list, builtin: true}, nil
+	case "always", "force", "any":
+		list, err := decodeECHList(fallbackECH)
+		if err != nil {
+			return echFallback{}, fmt.Errorf("the built-in ECH config is not base64: %w", err)
+		}
+		return echFallback{list: list, builtin: true, always: true}, nil
+	default:
+		list, err := decodeECHList(strings.TrimSpace(value))
+		if err != nil {
+			return echFallback{}, fmt.Errorf("the ECH config is not base64: %w", err)
+		}
+		return echFallback{list: list}, nil
+	}
+}
+
+// decodeECHList reads an ECHConfigList as base64, with or without the
+// padding.
+func decodeECHList(value string) ([]byte, error) {
+	list, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		list, err = base64.RawStdEncoding.DecodeString(value)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(list) == 0 {
+		return nil, errors.New("it is empty")
+	}
+	return list, nil
+}
+
+// flagWasSet says whether the user gave the flag, so that the environment
+// does not override it.
+func flagWasSet(name string) bool {
+	given := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			given = true
+		}
+	})
+	return given
+}
+
+// forHost says whether the fallback is for this upstream. A config the
+// user gave is theirs to apply everywhere; the built-in Cloudflare one is
+// only for a host whose address is Cloudflare's, because another server
+// would answer under the cover name and fail the handshake.
+func (f echFallback) forHost(host string) bool {
+	if len(f.list) == 0 {
+		return false
+	}
+	if !f.builtin || f.always {
+		return true
+	}
+	return cloudflareHost(host)
+}
+
+// describe is what the log says about the fallback, without the config
+// itself.
+func (f echFallback) describe() string {
+	switch {
+	case len(f.list) == 0:
+		return "off"
+	case f.always:
+		return "the built-in Cloudflare config, for every upstream"
+	case f.builtin:
+		return "the built-in Cloudflare config, for hosts behind Cloudflare"
+	default:
+		return "the config given, for every upstream"
+	}
+}
+
+// source is what the log says when the fallback is used.
+func (f echFallback) source() string {
+	if f.builtin {
+		return "the built-in Cloudflare fallback"
+	}
+	return "the configured fallback"
 }
 
 // dial connects to the upstream with Encrypted Client Hello. A server that

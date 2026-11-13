@@ -253,7 +253,9 @@ export function buildSidecar(spawnImpl = spawn, go = findGo()) {
 
 // sidecarArgs are the flags the sidecar is started with: the file it
 // reads its upstreams from, the address it listens on, and what the
-// user says about going on without an ECH config.
+// user says about going on without an ECH config. The ECH fallback is
+// left to the sidecar's own -ech-fallback and ECH_SIDECAR_ECH_FALLBACK,
+// which it reads itself.
 export function sidecarArgs(file, listen = "") {
   if (!file) throw new Error(NO_UPSTREAMS)
   const args = ["-upstreams-file", file]
