@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"net"
 	"testing"
+	"time"
 )
 
 func TestParseFallback(t *testing.T) {
@@ -113,5 +115,60 @@ func TestCloudflareIP(t *testing.T) {
 		if got := cloudflareIP(net.ParseIP(test.address)); got != test.want {
 			t.Fatalf("%s is Cloudflare's: %v, wanted %v", test.address, got, test.want)
 		}
+	}
+}
+
+func TestBuiltinFallbackCanBecomePlain(t *testing.T) {
+	fallback, err := parseFallback("cloudflare")
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := &upstream{ready: make(chan struct{})}
+	u.setFallback(fallback.list)
+
+	list, builtin, plain := u.echList(context.Background())
+	if len(list) == 0 || !builtin || plain {
+		t.Fatalf("the fallback config is %d bytes, built-in %v, plain %v", len(list), builtin, plain)
+	}
+	if !u.hasECH() {
+		t.Fatal("the fallback config is not in use")
+	}
+
+	u.setPlain()
+	list, builtin, plain = u.echList(context.Background())
+	if len(list) != 0 || builtin || !plain {
+		t.Fatalf("going plain left %d bytes, built-in %v, plain %v", len(list), builtin, plain)
+	}
+	if u.hasECH() {
+		t.Fatal("going plain kept the ECH config in use")
+	}
+	if cover := u.coverName(); cover != "" {
+		t.Fatalf("going plain kept the cover name %q", cover)
+	}
+}
+
+func TestAuthoritativeConfigClearsFallback(t *testing.T) {
+	fallback, err := parseFallback("cloudflare")
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := &upstream{ready: make(chan struct{})}
+	u.setFallback(fallback.list)
+	u.setList(fallback.list)
+
+	_, builtin, plain := u.echList(context.Background())
+	if builtin || plain {
+		t.Fatalf("the authoritative config is built-in %v, plain %v", builtin, plain)
+	}
+}
+
+func TestAllowPlainDoesNotWait(t *testing.T) {
+	u := &upstream{ready: make(chan struct{}), plain: true}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	list, builtin, plain := u.echList(ctx)
+	if len(list) != 0 || builtin || !plain {
+		t.Fatalf("the config is %d bytes, built-in %v, plain %v", len(list), builtin, plain)
 	}
 }

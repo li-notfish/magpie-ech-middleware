@@ -67,6 +67,7 @@ All of them are the plugin's own, in `plugins.json`:
 | Option | Default | What it does |
 | --- | --- | --- |
 | `port` | `8790` | which port the sidecar listens on |
+| `echFallback` | `""` | the ECH config offered when DoH gives none: `cloudflare`, `always`, `off`, or a base64 `ECHConfigList` |
 
 The options are read when the plugin is loaded: when plugins.json changes,
 magpie loads the plugin again.
@@ -120,6 +121,13 @@ name `cloudflare-ech.com`). The built-in one is only used for an upstream
 whose address is in Cloudflare's own networks: another server would answer
 under the cover name, and the handshake would fail.
 
+The built-in config is a guess, because not every zone behind Cloudflare has
+ECH enabled. When the edge rejects it without offering another config, the
+sidecar retries that connection with plain TLS, so an upstream that does not
+enable ECH stays usable. Only this built-in guess may end in plain TLS: a
+config from DoH or supplied in `upstreams.json` is not silently downgraded.
+If you would rather fail than connect without ECH, turn the fallback off.
+
 - `ECH_SIDECAR_ECH_FALLBACK=off` (or `-ech-fallback ""`) turns it off.
 - `ECH_SIDECAR_ECH_FALLBACK=<base64 ECHConfigList>` (or
   `-ech-fallback <base64>`) uses a configuration of your own for every
@@ -131,7 +139,11 @@ under the cover name, and the handshake would fail.
 - An `ech` value in `upstreams.json` still wins over all of them.
 
 The flag wins over the environment variable; both win over the built-in
-default.
+default. The plugin's `echFallback` option is that flag: what it names is
+passed to the sidecar as `-ech-fallback`, so it wins over the environment
+variable too; leave it empty and the environment variable and the built-in
+default decide. The sidecar reads it when it starts: after changing it,
+restart magpie.
 
 ## Running the sidecar on its own
 
@@ -169,7 +181,9 @@ The repository carries no binaries. They are the assets of the
 [sidecar release](https://github.com/li-notfish/magpie-ech-middleware/releases/tag/sidecar),
 one per platform and architecture, so installing the package is enough and
 needs no Go: the first time the sidecar is needed, its binary is downloaded
-into the plugin's own folder in magpie's directory and kept there:
+into the plugin's own folder in magpie's directory, under a folder named for
+this package's version, and kept there. An upgrade downloads the binary of
+its own version instead of running the one left by the version before:
 
 | Platform | Asset |
 | --- | --- |
@@ -196,7 +210,8 @@ npm run build
 - **An upstream publishes no ECH configuration** — no HTTPS record, or
   none with `ech` in it: an upstream behind Cloudflare gets the built-in
   fallback; any other one can be given a configuration by hand in
-  upstreams.json (see above).
+  upstreams.json (see above), or with the `echFallback` option when one
+  configuration fits every upstream.
 - **In a hurry, and this one connection may go in the clear** — set
   `ECH_SIDECAR_ALLOW_PLAIN=1` and restart magpie: an upstream no ECH
   configuration is found for goes out without one.

@@ -19,7 +19,7 @@
 // be one.
 import { ensureSidecar, setUpstream } from "./sidecar.mjs"
 import { KINDS, addressOf, kindOf, listedOf, slugOf, validateAddress } from "./ech.providers.js"
-import { portOf } from "./ech.shared.js"
+import { echFallbackOf, portOf } from "./ech.shared.js"
 
 // PROVIDER is the provider this package serves. Its models come from the
 // upstream each account is signed in to, so none are declared here.
@@ -28,6 +28,7 @@ const PROVIDER = "ech"
 export const ech = async (input, options) => {
   const directory = typeof input?.directory === "string" ? input.directory : ""
   const port = portOf(options)
+  const fallback = echFallbackOf(options)
 
   return {
     config: async (cfg) => {
@@ -103,7 +104,7 @@ export const ech = async (input, options) => {
         // for a request, not for a listing: the upstream is written down
         // here, the way the loader writes it for its requests.
         setUpstream(directory, slugOf(address), address)
-        const up = await ensureSidecar({ directory, port })
+        const up = await ensureSidecar({ directory, port, echFallback: fallback })
         if (!up) {
           console.error("[ech] the sidecar is not up, so the models stay as they were")
           return known

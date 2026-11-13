@@ -7,7 +7,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ech } from "./ech.plugin.js"
 import { addressOf, kindOf, listedOf, slugOf, validateAddress } from "./ech.providers.js"
-import { portOf } from "./ech.shared.js"
+import { echFallbackOf, portOf } from "./ech.shared.js"
 import { upstreamFile } from "./sidecar.mjs"
 
 const temps = []
@@ -294,5 +294,14 @@ describe("the helpers", () => {
     expect(portOf({})).toBe(8790)
     expect(portOf(null)).toBe(8790)
     expect(portOf({ port: 70000 })).toBe(8790)
+  })
+
+  test("the ECH fallback is the one the user set", () => {
+    expect(echFallbackOf({ echFallback: " always " })).toBe("always")
+    expect(echFallbackOf({ echFallback: "AEX+DQBB" })).toBe("AEX+DQBB")
+    expect(echFallbackOf({})).toBe("")
+    expect(echFallbackOf({ echFallback: "  " })).toBe("")
+    expect(echFallbackOf(null)).toBe("")
+    expect(echFallbackOf({ echFallback: 8790 })).toBe("")
   })
 })

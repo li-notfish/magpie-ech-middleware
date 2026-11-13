@@ -6,7 +6,9 @@ import http from "node:http"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import {
+  VERSION,
   assetName,
+  downloadDir,
   downloadSidecar,
   findGo,
   findSidecar,
@@ -84,6 +86,12 @@ describe("servesUpstreams", () => {
     expect(servesUpstreams(said, { nvidia: "https://api.example.com/v1" })).toBe(true)
   })
 
+  test("is so when a wanted upstream carries its ECH config too", () => {
+    const said = { upstreams: { nvidia: { url: "https://api.example.com/v1" } } }
+    const want = { nvidia: { url: "https://api.example.com/v1", ech: "a config given by hand" } }
+    expect(servesUpstreams(said, want)).toBe(true)
+  })
+
   test("is not so when an address is another", () => {
     const said = { upstreams: { nvidia: { url: "https://other.example.com/v1" } } }
     expect(servesUpstreams(said, { nvidia: "https://api.example.com/v1" })).toBe(false)
@@ -111,6 +119,10 @@ describe("the sidecar's binary", () => {
     expect(platformDir("linux", "x64", "/magpie")).toContain(join("magpie", "magpie-ech-middleware", "bin", "linux-x64"))
   })
 
+  test("is downloaded by version, so an upgrade does not run the old one", () => {
+    expect(downloadDir("linux", "x64", "/magpie")).toContain(join("magpie", "magpie-ech-middleware", "bin", "linux-x64", `v${VERSION}`))
+  })
+
   test("is named as an asset of the release for its platform", () => {
     expect(assetName("win32", "x64")).toBe("ech-sidecar-win32-x64.exe")
     expect(assetName("linux", "arm64")).toBe("ech-sidecar-linux-arm64")
@@ -125,12 +137,28 @@ describe("the sidecar's binary", () => {
       return { ok: true, arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length) }
     }
     const got = await downloadSidecar(dir, "https://example.com/ech-sidecar-linux-x64", fakeFetch)
-    expect(got).toBe(join(dir, "magpie-ech-middleware", "bin", `${process.platform}-${process.arch}`, sidecarName()))
+    expect(got).toBe(join(downloadDir(process.platform, process.arch, dir), sidecarName()))
     expect(readFileSync(got)).toEqual(bytes)
     expect(asked).toEqual(["https://example.com/ech-sidecar-linux-x64"])
     // a second ask finds the one kept, and downloads nothing
     expect(await downloadSidecar(dir, "https://example.com/other", fakeFetch)).toBe(got)
     expect(asked.length).toBe(1)
+  })
+
+  test("is downloaded again when only an unversioned copy is kept", async () => {
+    const dir = tempDir()
+    const old = join(platformDir(process.platform, process.arch, dir), sidecarName())
+    mkdirSync(dirname(old), { recursive: true })
+    writeFileSync(old, "the sidecar of an earlier version")
+    const bytes = Buffer.from("the sidecar of this version")
+    const got = await downloadSidecar(dir, "https://example.com/sidecar", async () => ({
+      ok: true,
+      arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length),
+    }))
+    expect(got).toBe(join(downloadDir(process.platform, process.arch, dir), sidecarName()))
+    expect(readFileSync(got)).toEqual(bytes)
+    expect(findSidecar("", dir)).not.toBe(old)
+    expect(readFileSync(old, "utf8")).toBe("the sidecar of an earlier version")
   })
 
   test("is not downloaded when the release says nothing", async () => {
@@ -159,6 +187,26 @@ describe("the sidecar's binary", () => {
 describe("sidecarArgs", () => {
   test("are the file of the upstreams and the address to listen on", () => {
     expect(sidecarArgs("C:/magpie/upstreams.json", "127.0.0.1:8790")).toEqual([
+      "-upstreams-file",
+      "C:/magpie/upstreams.json",
+      "-listen",
+      "127.0.0.1:8790",
+    ])
+  })
+
+  test("carry the ECH fallback the options name", () => {
+    expect(sidecarArgs("C:/magpie/upstreams.json", "127.0.0.1:8790", "always")).toEqual([
+      "-upstreams-file",
+      "C:/magpie/upstreams.json",
+      "-listen",
+      "127.0.0.1:8790",
+      "-ech-fallback",
+      "always",
+    ])
+  })
+
+  test("leave the fallback to the sidecar when the options name none", () => {
+    expect(sidecarArgs("C:/magpie/upstreams.json", "127.0.0.1:8790", "")).toEqual([
       "-upstreams-file",
       "C:/magpie/upstreams.json",
       "-listen",

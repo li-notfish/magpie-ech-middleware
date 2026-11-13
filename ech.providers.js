@@ -16,6 +16,13 @@ const NPMS = {
   gemini: "@ai-sdk/google",
 }
 
+// LIST_WAIT is how long a listing may take. The first one gives the sidecar
+// time to resolve the upstream's ECH config over DoH, fall back to the
+// built-in config, and retry with plain TLS when the edge rejects that config:
+// for a Cloudflare host whose HTTPS record is stripped, all three happen
+// before the listing itself is answered.
+const LIST_WAIT = 30000
+
 // KINDS is the kinds of API an upstream may speak, as the sign-in asks
 // them: the first is what most of them speak.
 export const KINDS = [
@@ -156,7 +163,7 @@ function anthropicHeaders(key) {
 async function getOf(url, headers = {}) {
   let said
   try {
-    said = await fetch(url, { headers, signal: AbortSignal.timeout(10000) })
+    said = await fetch(url, { headers, signal: AbortSignal.timeout(LIST_WAIT) })
   } catch {
     return null
   }

@@ -12,3 +12,12 @@ export function portOf(options) {
   const port = options && Number(options.port)
   return Number.isInteger(port) && port > 0 && port < 65536 ? port : DEFAULT_PORT
 }
+
+// echFallbackOf is the ECH fallback the user set in the options, as
+// sidecarArgs hands it to -ech-fallback: cloudflare, always, off, or a
+// base64 ECHConfigList. Nothing set leaves the sidecar's own default and
+// ECH_SIDECAR_ECH_FALLBACK in charge.
+export function echFallbackOf(options) {
+  const fallback = options && typeof options.echFallback === "string" ? options.echFallback.trim() : ""
+  return fallback
+}

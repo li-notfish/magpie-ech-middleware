@@ -8,12 +8,12 @@
 // The sidecar's binaries are published as the assets of the repository's
 // sidecar release, one per platform and architecture, so the repository
 // itself stays small. A machine that runs one of the platforms covered
-// needs no Go at all: the first time the sidecar is needed, its binary is
-// downloaded into this plugin's own folder in magpie's directory and kept
-// there. A binary put by hand in the package, or named by ECH_SIDECAR_PATH,
-// is used before any download. The Go source is beside all of it for the
-// platforms that have no binary: the package builds it when it is missing
-// and this computer has Go.
+// needs no Go at all: the first time the sidecar of this package's version
+// is needed, its binary is downloaded into this plugin's own folder in
+// magpie's directory and kept there. A binary put by hand in the package,
+// or named by ECH_SIDECAR_PATH, is used before any download. The Go source
+// is beside all of it for the platforms that have no binary: the package
+// builds it when it is missing and this computer has Go.
 //
 // The upstreams the sidecar talks to are the ones the user signed in to:
 // the plugin writes each into a file of its own, in magpie's folder, and
@@ -25,7 +25,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSy
 import http from "node:http"
 import { delimiter, dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { portOf } from "./ech.shared.js"
+import { echFallbackOf, portOf } from "./ech.shared.js"
 
 // Where the package sits, and where the sidecar is looked for.
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -48,16 +48,24 @@ const DOWNLOAD_WAIT = 120000
 // under, one asset per platform and architecture.
 const RELEASE_TAG = "sidecar"
 
-// REPO is the repository the release is published to, read from the
-// package's own package.json.
-const REPO = (() => {
+// PACKAGE is what the package's own package.json says: the repository the
+// release is published to, and the version the binary kept in magpie's
+// directory belongs to.
+const PACKAGE = (() => {
   try {
-    const pkg = JSON.parse(readFileSync(join(HERE, "package.json"), "utf8"))
-    return String(pkg?.repository?.url ?? "").replace(/^.*github\.com[:/]/, "").replace(/\.git$/, "")
+    return JSON.parse(readFileSync(join(HERE, "package.json"), "utf8"))
   } catch {
-    return ""
+    return {}
   }
 })()
+
+// VERSION is the package's version. The downloaded binary is kept in a
+// folder named after it, so an upgrade downloads its own instead of finding
+// the one an earlier version left behind.
+export const VERSION = typeof PACKAGE?.version === "string" ? PACKAGE.version.trim() : ""
+
+// REPO is the repository the release is published to.
+const REPO = String(PACKAGE?.repository?.url ?? "").replace(/^.*github\.com[:/]/, "").replace(/\.git$/, "")
 
 // HEALTH_PATH answers the keeper's own check without touching the
 // upstream.
@@ -121,23 +129,30 @@ export function sidecarName(platform = process.platform) {
 
 // platformDir is the folder the sidecar for a platform is in, in the
 // package and in magpie's directory. The one in the package is put there
-// by hand or by a build; the one in magpie's directory is where a download
-// keeps it, so that the package itself carries no binary.
+// by hand or by a build; the one in magpie's directory holds the download
+// for each version, so that the package itself carries no binary.
 export function platformDir(platform = process.platform, arch = process.arch, directory = "") {
   const base = directory ? join(directory, FOLDER) : SIDECAR_DIR
   return join(base, "bin", `${platform}-${arch}`)
 }
 
+// downloadDir is where the binary downloaded for this package's version is
+// kept. The version in the path is what makes an upgrade download its own
+// binary: the unversioned folder an earlier version used is never run.
+export function downloadDir(platform = process.platform, arch = process.arch, directory = "") {
+  return join(platformDir(platform, arch, directory), `v${VERSION || "0"}`)
+}
+
 // findSidecar is the binary to run: the one the user set, the one put in
 // the package for this platform, the one downloaded into magpie's
-// directory for it, the one on the PATH, or the bare name.
+// directory for this version, the one on the PATH, or the bare name.
 export function findSidecar(path = "", directory = "") {
   const name = sidecarName()
   const candidates = [
     path,
     process.env.ECH_SIDECAR_PATH,
     join(platformDir(), name),
-    directory ? join(platformDir(process.platform, process.arch, directory), name) : "",
+    directory ? join(downloadDir(process.platform, process.arch, directory), name) : "",
     join(SIDECAR_DIR, "bin", name),
     join(SIDECAR_DIR, name),
   ].filter(Boolean)
@@ -158,13 +173,12 @@ export function releaseURL(tag = RELEASE_TAG, repo = REPO) {
 }
 
 // downloadSidecar fetches the binary of this platform from the release and
-// keeps it in this plugin's own folder in magpie's directory, the folder
-// the package's own build writes to as well, so a downloaded one is found
-// like a built one. It answers the path it kept, or null when the release
-// could not be reached.
+// keeps it in this plugin's own folder in magpie's directory, under the
+// package's version, so a binary kept for another version is never run. It
+// answers the path it kept, or null when the release could not be reached.
 export async function downloadSidecar(directory = configDirectory, url = releaseURL(), fetchImpl = fetch) {
   if (!directory || !url) return null
-  const dir = platformDir(process.platform, process.arch, directory)
+  const dir = downloadDir(process.platform, process.arch, directory)
   const out = join(dir, sidecarName())
   if (existsSync(out)) return out
   let said
@@ -252,21 +266,22 @@ export function buildSidecar(spawnImpl = spawn, go = findGo()) {
 }
 
 // sidecarArgs are the flags the sidecar is started with: the file it
-// reads its upstreams from, the address it listens on, and what the
-// user says about going on without an ECH config. The ECH fallback is
-// left to the sidecar's own -ech-fallback and ECH_SIDECAR_ECH_FALLBACK,
-// which it reads itself.
-export function sidecarArgs(file, listen = "") {
+// reads its upstreams from, the address it listens on, what the user
+// says about going on without an ECH config, and the ECH fallback when
+// the options name one. Without one, the sidecar's own -ech-fallback
+// and ECH_SIDECAR_ECH_FALLBACK decide.
+export function sidecarArgs(file, listen = "", fallback = "") {
   if (!file) throw new Error(NO_UPSTREAMS)
   const args = ["-upstreams-file", file]
   if (listen) args.push("-listen", listen)
+  if (fallback) args.push("-ech-fallback", fallback)
   if (process.env.ECH_SIDECAR_ALLOW_PLAIN === "1") args.push("-allow-plain")
   return args
 }
 
 // startSidecar runs the sidecar and waits for the port it took. The
 // sidecar writes one JSON line to its stdout when it is ready.
-export function startSidecar(spawnImpl = spawn, path = "", file = "", listen = "") {
+export function startSidecar(spawnImpl = spawn, path = "", file = "", listen = "", fallback = "") {
   if (!file) return Promise.reject(new Error(NO_UPSTREAMS))
   const binary = findSidecar(path)
   return new Promise((resolve, reject) => {
@@ -281,7 +296,7 @@ export function startSidecar(spawnImpl = spawn, path = "", file = "", listen = "
     }
     let proc
     try {
-      proc = spawnImpl(binary, sidecarArgs(file, listen), { stdio: ["ignore", "pipe", "pipe"], windowsHide: true })
+      proc = spawnImpl(binary, sidecarArgs(file, listen, fallback), { stdio: ["ignore", "pipe", "pipe"], windowsHide: true })
     } catch (error) {
       reject(new Error(`the sidecar could not be started: ${error?.message ?? error}`))
       return
@@ -395,6 +410,15 @@ export async function ensureSidecar(options = {}) {
   return pending
 }
 
+// upstreamAddress is the address a health answer or a wanted upstream
+// names: some of the latter are objects with an ECH config beside the
+// address.
+function upstreamAddress(value) {
+  if (typeof value === "string") return value
+  if (value && typeof value === "object" && typeof value.url === "string") return value.url
+  return ""
+}
+
 // servesUpstreams is whether the sidecar that is up serves the upstreams
 // that are wanted: the same names at the same addresses.
 export function servesUpstreams(said, want = wanted) {
@@ -405,9 +429,8 @@ export function servesUpstreams(said, want = wanted) {
   return names.every((name) => {
     const u = have[name]
     if (!u) return false
-    const url = typeof u === "string" ? u : u.url
     const trim = (v) => String(v ?? "").replace(/\/+$/, "")
-    return trim(url) === trim(want[name])
+    return trim(upstreamAddress(u)) === trim(upstreamAddress(want[name]))
   })
 }
 
@@ -424,6 +447,7 @@ export async function start(options = {}) {
   const file = upstreamFile(configDirectory)
   const port = portOf(o)
   const listen = `127.0.0.1:${port}`
+  const fallback = echFallbackOf(o)
 
   // The check is given the time the caller has: the gateway hook that
   // starts the sidecar has a second of its own, and the check must not
@@ -445,7 +469,7 @@ export async function start(options = {}) {
     const got = await downloadSidecar(configDirectory)
     if (got) binary = got
   }
-  const { child } = await startSidecar(spawn, binary, file, listen)
+  const { child } = await startSidecar(spawn, binary, file, listen, fallback)
   running.add(child)
   child?.once?.("exit", () => {
     running.delete(child)

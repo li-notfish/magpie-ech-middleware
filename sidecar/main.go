@@ -14,7 +14,10 @@
 //
 // -ech-fallback defaults to cloudflare: the built-in ECH config of
 // Cloudflare's edge, offered only to upstreams whose address is in
-// Cloudflare's own networks. ECH_SIDECAR_ECH_FALLBACK overrides it when
+// Cloudflare's own networks. A zone behind Cloudflare need not enable ECH:
+// when the edge rejects the built-in list without offering another one, the
+// connection is retried with plain TLS, but a list from DoH or from the user
+// is never silently downgraded. ECH_SIDECAR_ECH_FALLBACK overrides it when
 // the flag is not given; always offers it to every upstream; "" or off
 // turns the fallback off.
 //
@@ -107,12 +110,17 @@ type upstream struct {
 	url  *url.URL
 	ech  string
 
-	mu    sync.Mutex
-	list  []byte
-	cover string
+	mu       sync.Mutex
+	list     []byte
+	cover    string
+	fallback bool
+	plain    bool
 
 	// ready is closed when the first config list arrives, and allowPlain
-	// says the sidecar goes on without one when there is none.
+	// says the sidecar goes on without one when there is none. plain is
+	// whether that is what this upstream does now: the user allowed it, or
+	// the server rejected the speculative built-in config and the request
+	// was retried without ECH.
 	ready      chan struct{}
 	once       sync.Once
 	allowPlain bool
@@ -337,6 +345,7 @@ func newUpstream(name, address, ech string, allowPlain bool) (*upstream, error) 
 		ech:        ech,
 		ready:      make(chan struct{}),
 		allowPlain: allowPlain,
+		plain:      allowPlain,
 	}
 	u.transport = &http.Transport{
 		DialContext:         (&net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}).DialContext,
@@ -447,7 +456,11 @@ func (u *upstream) resolve(doh string, fallback echFallback) {
 		}
 		log.Printf("no ECH config for %s: %v", host, err)
 		if u.ech == "" && fallback.forHost(host) {
-			u.setList(fallback.list)
+			if fallback.builtin {
+				u.setFallback(fallback.list)
+			} else {
+				u.setList(fallback.list)
+			}
 			log.Printf("ECH for %s uses %s, cover name %q", host, fallback.source(), u.coverName())
 			return
 		}
@@ -576,13 +589,17 @@ func (f echFallback) source() string {
 
 // dial connects to the upstream with Encrypted Client Hello. A server that
 // refuses the config list we sent offers another one; the handshake is made
-// again with it.
+// again with it. The built-in fallback is only a guess, though: when the edge
+// rejects it without offering another one, the connection is made with plain
+// TLS. A config from DoH or from the user is authoritative, and is not
+// silently downgraded.
 func (u *upstream) dial(ctx context.Context, network, addr string) (net.Conn, error) {
-	list := u.echList(ctx)
-	if len(list) == 0 && !u.allowPlain {
+	list, fallback, plain := u.echList(ctx)
+	if len(list) == 0 && !plain {
 		return nil, fmt.Errorf("no ECH config for %s: the lookup did not finish in time", u.url.Hostname())
 	}
 	var err error
+	var retry []byte
 	// Each edge of a network may know a different config list, so a
 	// rejection is answered with the list that edge offers and the
 	// handshake is made again with it.
@@ -590,15 +607,38 @@ func (u *upstream) dial(ctx context.Context, network, addr string) (net.Conn, er
 		var conn net.Conn
 		conn, err = u.handshake(ctx, network, addr, list)
 		if err == nil {
+			// A config the edge offered and then accepted is the
+			// authoritative one for the connections that follow.
+			if len(retry) > 0 {
+				u.setList(retry)
+			}
 			return conn, nil
 		}
 		var rejected *tls.ECHRejectionError
-		if !errors.As(err, &rejected) || len(rejected.RetryConfigList) == 0 {
+		if !errors.As(err, &rejected) {
 			return nil, err
 		}
-		u.setList(rejected.RetryConfigList)
+		if len(rejected.RetryConfigList) == 0 {
+			// A published config is strict: there is nothing more
+			// to try. The built-in one was only a guess, so the
+			// request goes on without ECH.
+			if !fallback {
+				return nil, err
+			}
+			break
+		}
+		retry = rejected.RetryConfigList
 		list = rejected.RetryConfigList
-		log.Printf("the server rejected our ECH config; retrying with the one it offered, under the cover name %q", u.coverName())
+		log.Printf("the server rejected our ECH config; retrying with the one it offered, under the cover name %q", coverName(list))
+	}
+	if fallback {
+		u.setPlain()
+		log.Printf("the server rejected the built-in ECH config of %s; retrying with plain TLS", u.url.Hostname())
+		conn, plainErr := u.handshake(ctx, network, addr, nil)
+		if plainErr != nil {
+			return nil, fmt.Errorf("the server rejected ECH, and plain TLS failed: %w", plainErr)
+		}
+		return conn, nil
 	}
 	return nil, err
 }
@@ -636,37 +676,63 @@ func (u *upstream) handshake(ctx context.Context, network, addr string, list []b
 	return conn, nil
 }
 
-// echList is the config list in use. When there is none yet, and the
-// sidecar is to go on without one only when it is told to, it waits for
-// the lookup to find one: a request must not go out in the clear because
-// the DNS was slow.
-func (u *upstream) echList(ctx context.Context) []byte {
+// echList is the config list in use, whether it is the speculative built-in
+// one, and whether plain TLS is allowed. When there is none yet, and plain TLS
+// is not allowed, it waits for the lookup to finish: a request must not go out
+// in the clear because the DNS was slow.
+func (u *upstream) echList(ctx context.Context) ([]byte, bool, bool) {
 	u.mu.Lock()
-	list := u.list
+	list, fallback, plain := u.list, u.fallback, u.plain
 	u.mu.Unlock()
-	if len(list) > 0 || u.allowPlain {
-		return list
+	if len(list) > 0 || plain {
+		return list, fallback, plain
 	}
 	timer := time.NewTimer(handshakeTimeout)
 	defer timer.Stop()
 	select {
 	case <-u.ready:
 	case <-timer.C:
-		return nil
+		return nil, false, false
 	case <-ctx.Done():
-		return nil
+		return nil, false, false
 	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	return u.list
+	return u.list, u.fallback, u.plain
 }
 
-// setList keeps the config list in use and the cover name it names.
+// setList keeps an authoritative config list and the cover name it names.
 func (u *upstream) setList(list []byte) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.list = list
 	u.cover = coverName(list)
+	u.fallback = false
+	u.once.Do(func() { close(u.ready) })
+}
+
+// setFallback keeps a config list that was guessed rather than published:
+// the built-in Cloudflare one. A server is free to reject that guess, and
+// dialing it again would not make the rejection any different.
+func (u *upstream) setFallback(list []byte) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.list = list
+	u.cover = coverName(list)
+	u.fallback = true
+	u.once.Do(func() { close(u.ready) })
+}
+
+// setPlain gives up ECH for this upstream, and lets a request that is waiting
+// for a config list go on without one. It is called when the server rejects
+// the speculative built-in config, not when a published one is rejected.
+func (u *upstream) setPlain() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.list = nil
+	u.cover = ""
+	u.fallback = false
+	u.plain = true
 	u.once.Do(func() { close(u.ready) })
 }
 

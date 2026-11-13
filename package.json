@@ -1,6 +1,6 @@
 {
   "name": "magpie-ech-middleware",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Encrypted Client Hello for magpie: a provider signed in to with an upstream's address and key, whose traffic goes out with an encrypted client hello",
   "type": "module",
   "main": "./ech.plugin.js",
@@ -42,7 +42,8 @@
   "magpie": {
     "hooks": "./ech.hooks.js",
     "options": {
-      "port": 8790
+      "port": 8790,
+      "echFallback": ""
     }
   }
 }

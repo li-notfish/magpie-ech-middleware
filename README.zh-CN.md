@@ -56,6 +56,7 @@ agent 问 `ech/<模型>`，模型就是上游列出的那些。请求从 sidecar
 | 选项 | 默认 | 做什么 |
 | --- | --- | --- |
 | `port` | `8790` | sidecar 监听哪个端口 |
+| `echFallback` | `""` | DoH 查不到 ECH 配置时 sidecar 用的配置：`cloudflare`、`always`、`off`，或一段 base64 的 `ECHConfigList` |
 
 选项是插件加载的时候读的，plugins.json 变了 magpie 会重新加载插件。
 
@@ -101,6 +102,12 @@ ECH 配置时，sidecar 会用内置的 Cloudflare 边缘 ECH 配置（掩护名
 `cloudflare-ech.com`）兜底。内置配置只给地址落在 Cloudflare 自己网段里的上游
 用：别的服务器会按掩护名应答，握手会失败。
 
+这份内置配置只是猜测，因为不是每个接入 Cloudflare 的站点都启用了 ECH。边缘
+拒绝它、又没有给出另一份配置时，sidecar 会对这条连接改用普通 TLS 重试，所以
+没启用 ECH 的上游仍然能用。只有这份内置猜测可能这样改走普通 TLS：DoH 查到、或者
+`upstreams.json` 里给出的配置不会被悄悄降级。如果宁可用不了也不接受明文
+连接，就关掉兜底。
+
 - `ECH_SIDECAR_ECH_FALLBACK=off`（或 `-ech-fallback ""`）关掉兜底。
 - `ECH_SIDECAR_ECH_FALLBACK=<base64 ECHConfigList>`（或
   `-ech-fallback <base64>`）换成自己的配置，对所有上游生效。
@@ -109,7 +116,10 @@ ECH 配置时，sidecar 会用内置的 Cloudflare 边缘 ECH 配置（掩护名
   地址是 Cloudflare 的。
 - `upstreams.json` 里手写的 `ech` 仍然优先于以上所有。
 
-命令行 flag 优先于环境变量，两者都优先于内置默认值。
+命令行 flag 优先于环境变量，两者都优先于内置默认值。插件选项里的
+`echFallback` 就是这个 flag：设了它，它会被当作 `-ech-fallback` 传给 sidecar，
+同样优先于环境变量；留空时仍看环境变量和内置默认值。sidecar 是在启动时读它的，
+改完要重启 magpie 才会生效。
 
 ## 单独跑 sidecar
 
@@ -143,8 +153,8 @@ false、`cover` 是空的：它是就绪信号，不是握手的结论。`/_ech/
 
 仓库里不带二进制。它们是 [sidecar 发布](https://github.com/li-notfish/magpie-ech-middleware/releases/tag/sidecar)
 的附件，每个平台和架构一份，所以装上包就能用，不需要 Go：第一次需要
-sidecar 时，它的二进制会下载到 magpie 目录下本插件自己的文件夹里并保留在
-那里：
+sidecar 时，它的二进制会下载到 magpie 目录下本插件自己的文件夹里、按包的
+版本分目录保留。升级包后会下载新版本自己的二进制，不会继续运行上一版留下的：
 
 | 平台 | 附件名 |
 | --- | --- |
@@ -168,7 +178,8 @@ npm run build
   存下地址：重新登录一次。
 - **某个上游没有 ECH 配置** —— 它不发布 HTTPS 记录，或者记录里没有 `ech`：
   Cloudflare 后面的上游会用内置配置兜底；不是 Cloudflare 的可以在
-  upstreams.json 里手写一份（见上）。
+  upstreams.json 里手写一份（见上），或者在所有上游都能用同一份配置时用
+  `echFallback` 选项。
 - **急着用、不在乎这一条明文** —— 设 `ECH_SIDECAR_ALLOW_PLAIN=1` 再重启
   magpie：查不到 ECH 配置的上游会明文连出去。
 - **sidecar 起不来** —— 二进制下载不到（这个平台没有发布附件，或者没网）时，
