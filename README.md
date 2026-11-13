@@ -18,8 +18,8 @@ to the vendor.
   base URL), the kind of API the upstream speaks (Chat Completions,
   Responses, Anthropic Messages, Gemini), and the upstream's key. The
   models it lists are the upstream's own, asked for through the sidecar,
-  and each carries the levels of thought (low, medium, high) an agent may
-  ask it at.
+and each carries the levels of thought (low, medium, high, xhigh, max) an
+agent may ask it at.
 - **The sidecar** (`sidecar/`) is a small Go program: it resolves each
   upstream's ECH configuration over DoH, connects with an Encrypted
   Client Hello, and forwards the requests.
@@ -114,7 +114,8 @@ An upstream that publishes no ECH configuration can be given one by hand:
 The sidecar is a program of its own, and can be run by hand:
 
 ```sh
-sidecar/bin/win32-x64/ech-sidecar.exe -upstreams-file upstreams.json -listen 127.0.0.1:8790
+ech-sidecar.exe -upstreams-file upstreams.json -listen 127.0.0.1:8790
+# the one the plugin downloaded, the one in sidecar/bin/, or one on the PATH
 ```
 
 Once it is listening, it writes one line of JSON to its stdout:
@@ -139,18 +140,23 @@ A request is served by the upstream its path names:
 `/<the upstream's name>/chat/completions` goes to that upstream, under the
 address it has.
 
-The binaries of the platforms the package covers are in
-`sidecar/bin/<platform>-<arch>/`, so installing is enough, with no Go:
+The repository carries no binaries. They are the assets of the
+[sidecar release](https://github.com/li-notfish/magpie-ech-middleware/releases/tag/sidecar),
+one per platform and architecture, so installing the package is enough and
+needs no Go: the first time the sidecar is needed, its binary is downloaded
+into the plugin's own folder in magpie's directory and kept there:
 
-| Platform | Folders |
+| Platform | Asset |
 | --- | --- |
-| Windows x64 / arm64 | `sidecar/bin/win32-x64`, `sidecar/bin/win32-arm64` |
-| Linux x64 / arm64 | `sidecar/bin/linux-x64`, `sidecar/bin/linux-arm64` |
-| macOS x64 / arm64 | `sidecar/bin/darwin-x64`, `sidecar/bin/darwin-arm64` |
+| Windows x64 / arm64 | `ech-sidecar-win32-x64.exe`, `ech-sidecar-win32-arm64.exe` |
+| Linux x64 / arm64 | `ech-sidecar-linux-x64`, `ech-sidecar-linux-arm64` |
+| macOS x64 / arm64 | `ech-sidecar-darwin-x64`, `ech-sidecar-darwin-arm64` |
 
-A platform without a binary has the Go source beside it: when the machine
-has Go 1.26 or newer (the first `crypto/tls` that speaks Encrypted Client
-Hello), the package builds it:
+A binary put by hand in `sidecar/bin/<platform>-<arch>/`, or named by
+`ECH_SIDECAR_PATH`, is used before any download. A platform the release
+covers no asset of has the Go source beside it: when the machine has Go
+1.26 or newer (the first `crypto/tls` that speaks Encrypted Client Hello),
+the package builds it:
 
 ```sh
 npm run build
@@ -168,6 +174,7 @@ npm run build
 - **In a hurry, and this one connection may go in the clear** — set
   `ECH_SIDECAR_ALLOW_PLAIN=1` and restart magpie: an upstream no ECH
   configuration is found for goes out without one.
-- **The sidecar does not start** — on a platform without a binary, run
-  `npm run build` first; when the port is taken, give another in the
-  options.
+- **The sidecar does not start** — when its binary could not be downloaded
+  (no release asset for this platform, or no network), run `npm run build`
+  on a machine with Go first, or put one in `sidecar/bin/` by hand; when
+  the port is taken, give another in the options.

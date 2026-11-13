@@ -5,11 +5,15 @@
 // started: the Encrypted Client Hello needs Go's crypto/tls, so the
 // sidecar is a program of its own.
 //
-// The sidecar's binaries are in the package itself, in
-// sidecar/bin/<platform>-<arch>/, so a machine that runs one of the
-// platforms they cover needs no Go at all. The Go source is beside them
-// for the platforms that have no binary: the package builds it when it
-// is missing and this computer has Go.
+// The sidecar's binaries are published as the assets of the repository's
+// sidecar release, one per platform and architecture, so the repository
+// itself stays small. A machine that runs one of the platforms covered
+// needs no Go at all: the first time the sidecar is needed, its binary is
+// downloaded into this plugin's own folder in magpie's directory and kept
+// there. A binary put by hand in the package, or named by ECH_SIDECAR_PATH,
+// is used before any download. The Go source is beside all of it for the
+// platforms that have no binary: the package builds it when it is missing
+// and this computer has Go.
 //
 // The upstreams the sidecar talks to are the ones the user signed in to:
 // the plugin writes each into a file of its own, in magpie's folder, and
@@ -17,7 +21,7 @@
 // the published package carries no address of anyone's, and an upstream
 // signed in to later is served without the sidecar being started again.
 import { spawn } from "node:child_process"
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import http from "node:http"
 import { delimiter, dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -36,6 +40,24 @@ const SIDECAR_WAIT = 30000
 // sidecar again after a failure, so a request every second does not
 // spawn one a second.
 const RETRY = 30000
+
+// DOWNLOAD_WAIT is how long a download of the sidecar's binary may take.
+const DOWNLOAD_WAIT = 120000
+
+// RELEASE_TAG is the tag the repository publishes the sidecar's binaries
+// under, one asset per platform and architecture.
+const RELEASE_TAG = "sidecar"
+
+// REPO is the repository the release is published to, read from the
+// package's own package.json.
+const REPO = (() => {
+  try {
+    const pkg = JSON.parse(readFileSync(join(HERE, "package.json"), "utf8"))
+    return String(pkg?.repository?.url ?? "").replace(/^.*github\.com[:/]/, "").replace(/\.git$/, "")
+  } catch {
+    return ""
+  }
+})()
 
 // HEALTH_PATH answers the keeper's own check without touching the
 // upstream.
@@ -97,27 +119,75 @@ export function sidecarName(platform = process.platform) {
   return platform === "win32" ? "ech-sidecar.exe" : "ech-sidecar"
 }
 
-// platformDir is the folder the sidecar for a platform is in. The
-// prebuilt one that ships with the package is in sidecar/bin/<platform>-
-// <arch>, so a machine that runs one of them needs no Go at all.
-export function platformDir(platform = process.platform, arch = process.arch) {
-  return join(SIDECAR_DIR, "bin", `${platform}-${arch}`)
+// platformDir is the folder the sidecar for a platform is in, in the
+// package and in magpie's directory. The one in the package is put there
+// by hand or by a build; the one in magpie's directory is where a download
+// keeps it, so that the package itself carries no binary.
+export function platformDir(platform = process.platform, arch = process.arch, directory = "") {
+  const base = directory ? join(directory, FOLDER) : SIDECAR_DIR
+  return join(base, "bin", `${platform}-${arch}`)
 }
 
-// findSidecar is the binary to run: the one the user set, the prebuilt
-// one for this platform, the one built beside the package, or the one on
-// the PATH.
-export function findSidecar(path = "") {
+// findSidecar is the binary to run: the one the user set, the one put in
+// the package for this platform, the one downloaded into magpie's
+// directory for it, the one on the PATH, or the bare name.
+export function findSidecar(path = "", directory = "") {
   const name = sidecarName()
   const candidates = [
     path,
     process.env.ECH_SIDECAR_PATH,
     join(platformDir(), name),
+    directory ? join(platformDir(process.platform, process.arch, directory), name) : "",
     join(SIDECAR_DIR, "bin", name),
     join(SIDECAR_DIR, name),
   ].filter(Boolean)
   for (const candidate of candidates) if (existsSync(candidate)) return candidate
   return name
+}
+
+// assetName is the name of the sidecar's binary as an asset of the release:
+// ech-sidecar-<platform>-<arch>, with the extension on Windows.
+export function assetName(platform = process.platform, arch = process.arch) {
+  return `ech-sidecar-${platform}-${arch}${platform === "win32" ? ".exe" : ""}`
+}
+
+// releaseURL is where the asset of this platform is downloaded from.
+export function releaseURL(tag = RELEASE_TAG, repo = REPO) {
+  if (!repo) return ""
+  return `https://github.com/${repo}/releases/download/${tag}/${assetName()}`
+}
+
+// downloadSidecar fetches the binary of this platform from the release and
+// keeps it in this plugin's own folder in magpie's directory, the folder
+// the package's own build writes to as well, so a downloaded one is found
+// like a built one. It answers the path it kept, or null when the release
+// could not be reached.
+export async function downloadSidecar(directory = configDirectory, url = releaseURL(), fetchImpl = fetch) {
+  if (!directory || !url) return null
+  const dir = platformDir(process.platform, process.arch, directory)
+  const out = join(dir, sidecarName())
+  if (existsSync(out)) return out
+  let said
+  try {
+    said = await fetchImpl(url, { signal: AbortSignal.timeout(DOWNLOAD_WAIT), redirect: "follow" })
+  } catch {
+    return null
+  }
+  if (!said?.ok) return null
+  const bytes = Buffer.from(await said.arrayBuffer())
+  if (!bytes.length) return null
+  try {
+    mkdirSync(dir, { recursive: true })
+    const tmp = join(dir, `${sidecarName()}.part`)
+    writeFileSync(tmp, bytes)
+    renameSync(tmp, out)
+    if (process.platform !== "win32") chmodSync(out, 0o755)
+  } catch (error) {
+    console.error(`[ech] the sidecar's binary could not be kept: ${error?.message ?? error}`)
+    return null
+  }
+  console.log(`[ech] the sidecar's binary was downloaded: ${out}`)
+  return out
 }
 
 // findGo is the Go toolchain: the one in GOROOT, the usual install
@@ -137,8 +207,8 @@ export function findGo() {
 }
 
 // buildSidecar builds the sidecar from the Go source that ships with the
-// package. It is what makes the package work on a platform that has no
-// prebuilt binary, on a computer that has Go.
+// package. It is what makes the package work on a platform the release
+// covers no binary of, on a computer that has Go.
 export function buildSidecar(spawnImpl = spawn, go = findGo()) {
   const out = join(platformDir(), sidecarName())
   return new Promise((resolve, reject) => {
@@ -365,7 +435,15 @@ export async function start(options = {}) {
 
   console.log(`[ech] starting the sidecar on 127.0.0.1:${port} for ${names.join(", ")}`)
 
-  const { child } = await startSidecar(spawn, "", file, listen)
+  // The binary comes from the package when one is there, from the release
+  // when not: the download is kept in magpie's directory, and this start
+  // is the one that waits for it.
+  let binary = findSidecar("", configDirectory)
+  if (!existsSync(binary)) {
+    const got = await downloadSidecar(configDirectory)
+    if (got) binary = got
+  }
+  const { child } = await startSidecar(spawn, binary, file, listen)
   running.add(child)
   child?.once?.("exit", () => {
     running.delete(child)

@@ -1,6 +1,9 @@
-# The sidecar's binaries are in the repository, in sidecar/bin/: a machine
-# that runs one of the platforms they cover needs no Go at all. They are not
-# ignored, so that an install from the repository brings them along.
+# The sidecar's binaries are not in the repository: they are the assets of
+# the sidecar release, which the plugin downloads when it has no binary of
+# its own. The ones built by hand or downloaded are local, so they are
+# ignored.
+sidecar/bin/
+dist/
 
 # The code graph of the repository, of the machine that made it: it is of no
 # use to anyone else.

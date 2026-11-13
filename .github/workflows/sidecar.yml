@@ -1,9 +1,11 @@
 name: sidecar
 
-# The package ships a binary per platform, so that a machine that installs
-# it needs no Go at all. This workflow is how those binaries are made: one
-# Go build per platform, into sidecar/bin/<platform>-<arch>/, which is
-# where the plugin looks for the one it runs.
+# The repository carries no binaries, so that it stays small: one per
+# platform is published as an asset of the sidecar release instead, and a
+# machine that installs the package downloads the one of its own, needing
+# no Go at all. This workflow is how the assets are made: one Go build per
+# platform, into dist/<platform>-<arch>/, and an upload of them all to the
+# release.
 
 on:
   push:
@@ -22,6 +24,7 @@ on:
       - "sidecar.test.mjs"
 
 permissions:
+  # the assets of the sidecar release are written, the repository is not
   contents: write
 
 jobs:
@@ -46,15 +49,10 @@ jobs:
       - name: test
         run: bun test
 
-      - name: commit the binaries that changed
+      - name: publish the binaries as the release's assets
         if: github.event_name == 'push'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add sidecar/bin
-          if git diff --staged --quiet; then
-            echo "the binaries are the same as the ones in the repository"
-          else
-            git commit -m "chore: rebuild the sidecar binaries"
-            git push
-          fi
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: sidecar
+          files: dist/**/ech-sidecar-*
+          fail_on_unmatched_files: true

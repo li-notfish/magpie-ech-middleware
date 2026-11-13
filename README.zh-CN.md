@@ -13,7 +13,7 @@ Encrypted Client Hello 建连再转发给厂商。
 - **供应商插件**（`ech.plugin.js`）声明这个 ECH 供应商。登录时问三样：上游的
   地址（Base URL）、上游说的是哪种 API（Chat Completions、Responses、
   Anthropic Messages、Gemini）、上游的 Key。它列出的模型就是上游自己的模型，
-  从 sidecar 那边问来的，每个模型带低/中/高三档思考等级可选。
+  从 sidecar 那边问来的，每个模型带低/中/高/特高/最高五档思考等级可选。
 - **sidecar**（`sidecar/`）是一个小的 Go 程序：通过 DoH 解析每个上游的 ECH
   配置，用 Encrypted Client Hello 建连，再把请求转发过去。
 - **hooks**（`ech.hooks.js`）跑在 Bun 里（magpie 的插件宿主），那里可以起
@@ -98,7 +98,8 @@ agent 问 `ech/<模型>`，模型就是上游列出的那些。请求从 sidecar
 sidecar 本身是个程序，可以手动跑：
 
 ```sh
-sidecar/bin/win32-x64/ech-sidecar.exe -upstreams-file upstreams.json -listen 127.0.0.1:8790
+ech-sidecar.exe -upstreams-file upstreams.json -listen 127.0.0.1:8790
+# 插件下载的那个、sidecar/bin/ 里的，或 PATH 上的
 ```
 
 它监听起来之后往 stdout 写一行 JSON：
@@ -121,17 +122,21 @@ false、`cover` 是空的：它是就绪信号，不是握手的结论。`/_ech/
 请求由路径里点名的上游来服务：`/<上游的名字>/chat/completions` 走到那个上游，
 挂在它自己的地址底下。
 
-包覆盖的平台的二进制在 `sidecar/bin/<平台>-<架构>/`，所以装上就能用，不需要
-Go：
+仓库里不带二进制。它们是 [sidecar 发布](https://github.com/li-notfish/magpie-ech-middleware/releases/tag/sidecar)
+的附件，每个平台和架构一份，所以装上包就能用，不需要 Go：第一次需要
+sidecar 时，它的二进制会下载到 magpie 目录下本插件自己的文件夹里并保留在
+那里：
 
-| 平台 | 目录 |
+| 平台 | 附件名 |
 | --- | --- |
-| Windows x64 / arm64 | `sidecar/bin/win32-x64`、`sidecar/bin/win32-arm64` |
-| Linux x64 / arm64 | `sidecar/bin/linux-x64`、`sidecar/bin/linux-arm64` |
-| macOS x64 / arm64 | `sidecar/bin/darwin-x64`、`sidecar/bin/darwin-arm64` |
+| Windows x64 / arm64 | `ech-sidecar-win32-x64.exe`、`ech-sidecar-win32-arm64.exe` |
+| Linux x64 / arm64 | `ech-sidecar-linux-x64`、`ech-sidecar-linux-arm64` |
+| macOS x64 / arm64 | `ech-sidecar-darwin-x64`、`ech-sidecar-darwin-arm64` |
 
-没有二进制的平台有 Go 源码在旁边：机器上有 Go 1.26 或更新版本（第一个
-`crypto/tls` 会说 Encrypted Client Hello 的版本）时，包会自己把它编出来：
+手动放进 `sidecar/bin/<平台>-<架构>/` 的二进制，或者 `ECH_SIDECAR_PATH` 指定的，
+优先于下载。发布里没有附件的平台有 Go 源码在旁边：机器上有 Go 1.26 或
+更新版本（第一个 `crypto/tls` 会说 Encrypted Client Hello 的版本）时，包会
+自己把它编出来：
 
 ```sh
 npm run build
@@ -146,5 +151,6 @@ npm run build
   可以在 upstreams.json 里手写一份（见上）。
 - **急着用、不在乎这一条明文** —— 设 `ECH_SIDECAR_ALLOW_PLAIN=1` 再重启
   magpie：查不到 ECH 配置的上游会明文连出去。
-- **sidecar 起不来** —— 没有二进制的平台先 `npm run build`；端口被占了就在
-  选项里换一个。
+- **sidecar 起不来** —— 二进制下载不到（这个平台没有发布附件，或者没网）时，
+  先在有 Go 的机器上 `npm run build`，或手动放一个到 `sidecar/bin/`；端口被占了
+  就在选项里换一个。

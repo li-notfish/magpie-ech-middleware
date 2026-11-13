@@ -39,6 +39,13 @@ export function binaryName(goos = process.platform === "win32" ? "windows" : pro
   return goos === "windows" ? "ech-sidecar.exe" : "ech-sidecar"
 }
 
+// assetName is the sidecar's name as an asset of the release, for a
+// platform named the Node way (win32-x64): the runtime asks for the asset
+// by this name.
+export function assetName(nodeName) {
+  return `ech-sidecar-${nodeName}${nodeName.startsWith("win32") ? ".exe" : ""}`
+}
+
 // outDir is the folder the binary for a platform is in. It is the folder
 // the plugin looks in, so a binary built here is the one that is run.
 export function outDir(nodeName) {

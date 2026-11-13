@@ -1,9 +1,10 @@
 // Builds the Go sidecar the plugin runs, for this computer.
 //
-// The package ships a prebuilt binary for the platforms it covers, in
-// sidecar/bin/<platform>-<arch>/. This script builds the one for this
-// computer into that same folder, so a machine whose platform has no
-// prebuilt binary ends up with one.
+// The repository carries no binaries: they are the assets of the sidecar
+// release, which the plugin downloads when there is no binary of its own.
+// This script builds the one for this computer into sidecar/bin/<platform>-
+// <arch>/, the folder the plugin looks in first, so a machine whose
+// platform the release covers no asset of ends up with one.
 import { spawnSync } from "node:child_process"
 import { existsSync, mkdirSync } from "node:fs"
 import { join } from "node:path"

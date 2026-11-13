@@ -13,7 +13,6 @@
     "sidecar/main.go",
     "sidecar/ech.go",
     "sidecar/go.mod",
-    "sidecar/bin",
     "scripts/build.mjs",
     "scripts/build-all.mjs",
     "scripts/go.mjs",

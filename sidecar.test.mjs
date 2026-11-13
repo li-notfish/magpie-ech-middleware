@@ -6,10 +6,13 @@ import http from "node:http"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import {
+  assetName,
+  downloadSidecar,
   findGo,
   findSidecar,
   health,
   platformDir,
+  releaseURL,
   setUpstream,
   servesUpstreams,
   sidecarArgs,
@@ -105,12 +108,47 @@ describe("the sidecar's binary", () => {
 
   test("is looked for in the folder of this platform", () => {
     expect(platformDir("linux", "x64")).toContain(join("bin", "linux-x64"))
+    expect(platformDir("linux", "x64", "/magpie")).toContain(join("magpie", "magpie-ech-middleware", "bin", "linux-x64"))
   })
 
-  test("is found in the package", () => {
-    const found = findSidecar()
-    expect(found).toContain("sidecar")
-    expect(existsSync(found)).toBe(true)
+  test("is named as an asset of the release for its platform", () => {
+    expect(assetName("win32", "x64")).toBe("ech-sidecar-win32-x64.exe")
+    expect(assetName("linux", "arm64")).toBe("ech-sidecar-linux-arm64")
+  })
+
+  test("is downloaded from the release into magpie's directory", async () => {
+    const dir = tempDir()
+    const bytes = Buffer.from("a binary of its own")
+    const asked = []
+    const fakeFetch = async (url) => {
+      asked.push(url)
+      return { ok: true, arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length) }
+    }
+    const got = await downloadSidecar(dir, "https://example.com/ech-sidecar-linux-x64", fakeFetch)
+    expect(got).toBe(join(dir, "magpie-ech-middleware", "bin", `${process.platform}-${process.arch}`, sidecarName()))
+    expect(readFileSync(got)).toEqual(bytes)
+    expect(asked).toEqual(["https://example.com/ech-sidecar-linux-x64"])
+    // a second ask finds the one kept, and downloads nothing
+    expect(await downloadSidecar(dir, "https://example.com/other", fakeFetch)).toBe(got)
+    expect(asked.length).toBe(1)
+  })
+
+  test("is not downloaded when the release says nothing", async () => {
+    const dir = tempDir()
+    const got = await downloadSidecar(dir, "https://example.com/none", async () => ({ ok: false }))
+    expect(got).toBeNull()
+  })
+
+  test("is named in the release's address", () => {
+    const url = releaseURL("sidecar", "someone/repo")
+    expect(url).toBe(`https://github.com/someone/repo/releases/download/sidecar/${assetName()}`)
+  })
+
+  test("is found where the user set one", () => {
+    const dir = tempDir()
+    const own = join(dir, "my-sidecar")
+    writeFileSync(own, "x")
+    expect(findSidecar(own)).toBe(own)
   })
 
   test("is built with Go, which the machine may have", () => {
